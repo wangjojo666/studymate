@@ -24,7 +24,7 @@
 
       <div class="model-chip">
         <el-icon><Cpu /></el-icon>
-        <span>qwen3-vl:30b</span>
+        <span>DeepSeek · 本地 OCR</span>
       </div>
     </el-aside>
 

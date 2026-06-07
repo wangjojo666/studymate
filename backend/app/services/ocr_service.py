@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from app.config import settings
 
@@ -17,14 +18,22 @@ class OcrResult:
     processed_pages: int
 
 
-def ocr_pdf_with_qwen_vl(path: Path, start_page: int, max_pages: int) -> OcrResult:
+def ocr_pdf_with_qwen_vl(
+    path: Path,
+    start_page: int,
+    max_pages: int,
+    on_page_done: Callable[[int, str], None] | None = None,
+) -> OcrResult:
     try:
         import fitz
     except ImportError as exc:
         raise RuntimeError("缺少 PyMuPDF，无法把扫描版 PDF 渲染成图片。") from exc
 
-    base_url = (settings.llm_base_url or "http://127.0.0.1:11434").rstrip("/")
-    model = settings.llm_model or "qwen3-vl:30b"
+    if settings.ocr_llm_provider != "ollama":
+        raise RuntimeError("当前 OCR 仅支持 Ollama 视觉模型，请把 OCR_LLM_PROVIDER 设置为 ollama。")
+
+    base_url = (settings.ocr_llm_base_url or "http://127.0.0.1:11434").rstrip("/")
+    model = settings.ocr_llm_model or "qwen3-vl:30b"
     max_pages = min(max_pages, settings.ocr_max_pages_per_request)
 
     pages: list[tuple[int, str]] = []
@@ -39,6 +48,8 @@ def ocr_pdf_with_qwen_vl(path: Path, start_page: int, max_pages: int) -> OcrResu
             image_base64 = base64.b64encode(pixmap.tobytes("png")).decode("ascii")
             text = _ocr_single_page(base_url, model, image_base64, page_number)
             pages.append((page_number, text.strip()))
+            if on_page_done:
+                on_page_done(page_number, text.strip())
 
     return OcrResult(pages=pages, total_pages=total_pages, processed_pages=len(pages))
 

@@ -6,6 +6,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.entities import Document, DocumentChunk
@@ -44,23 +45,48 @@ def vectorize(text: str) -> tuple[dict[str, float], float]:
     return weights, norm
 
 
-def index_document_chunks(db: Session, document: Document, chunks: list[TextChunk]) -> None:
-    db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
-    for index, chunk in enumerate(chunks):
+def index_document_chunks(
+    db: Session,
+    document: Document,
+    chunks: list[TextChunk],
+    replace_document: bool = True,
+    replace_page_numbers: list[int] | None = None,
+) -> None:
+    if replace_document:
+        db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
+        first_index = 0
+    else:
+        page_numbers = sorted(set(replace_page_numbers or [chunk.page_number for chunk in chunks]))
+        if page_numbers:
+            db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document.id,
+                DocumentChunk.page_number.in_(page_numbers),
+            ).delete()
+        max_index = (
+            db.query(func.max(DocumentChunk.chunk_index))
+            .filter(DocumentChunk.document_id == document.id)
+            .scalar()
+        )
+        first_index = int(max_index or -1) + 1
+
+    for offset, chunk in enumerate(chunks):
         weights, norm = vectorize(chunk.content)
         db.add(
             DocumentChunk(
                 course_id=document.course_id,
                 document_id=document.id,
-                chunk_index=index,
+                chunk_index=first_index + offset,
                 page_number=chunk.page_number,
                 content=chunk.content,
                 token_weights=json.dumps(weights, ensure_ascii=False),
                 vector_norm=norm,
             )
         )
-    document.chunk_count = len(chunks)
-    document.status = "indexed" if chunks else "empty"
+    db.flush()
+    document.chunk_count = (
+        db.query(func.count(DocumentChunk.id)).filter(DocumentChunk.document_id == document.id).scalar() or 0
+    )
+    document.status = "indexed" if document.chunk_count else "empty"
     db.flush()
 
 

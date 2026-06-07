@@ -89,3 +89,22 @@ class GeneratedMaterial(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OcrJob(Base):
+    __tablename__ = "ocr_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    start_page: Mapped[int] = mapped_column(Integer, default=1)
+    max_pages: Mapped[int] = mapped_column(Integer, default=10)
+    total_pages: Mapped[int] = mapped_column(Integer, default=0)
+    current_page: Mapped[int] = mapped_column(Integer, default=0)
+    processed_pages: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

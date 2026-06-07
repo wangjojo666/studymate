@@ -27,7 +27,14 @@ def init_database() -> None:
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
 
-    from app.models.entities import ChatMessage, Course, Document, DocumentChunk, GeneratedMaterial  # noqa: F401
+    from app.models.entities import (  # noqa: F401
+        ChatMessage,
+        Course,
+        Document,
+        DocumentChunk,
+        GeneratedMaterial,
+        OcrJob,
+    )
 
     Base.metadata.create_all(bind=engine)
 

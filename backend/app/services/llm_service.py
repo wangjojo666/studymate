@@ -12,7 +12,7 @@ from app.config import settings
 
 PROVIDER_DEFAULTS = {
     "openai": ("https://api.openai.com/v1", "gpt-4o-mini", "OPENAI_API_KEY"),
-    "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat", "DEEPSEEK_API_KEY"),
+    "deepseek": ("https://api.deepseek.com", "deepseek-v4-flash", "DEEPSEEK_API_KEY"),
     "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", "DASHSCOPE_API_KEY"),
     "zhipu": ("https://open.bigmodel.cn/api/paas/v4", "glm-4-flash", "ZHIPU_API_KEY"),
 }
@@ -24,19 +24,51 @@ class LlmResponse:
     used_provider: str
 
 
+@dataclass(frozen=True)
+class LlmConfig:
+    provider: str
+    model: str
+    base_url: str
+    api_key: str
+
+
 def call_llm(messages: list[dict[str, str]], temperature: float = 0.2) -> LlmResponse | None:
-    provider = settings.llm_provider
+    primary = LlmConfig(
+        provider=settings.text_llm_provider,
+        model=settings.text_llm_model,
+        base_url=settings.text_llm_base_url,
+        api_key=settings.text_llm_api_key,
+    )
+    response = _call_provider(primary, messages, temperature)
+    if response:
+        return response
+
+    fallback = LlmConfig(
+        provider=settings.text_llm_fallback_provider,
+        model=settings.text_llm_fallback_model,
+        base_url=settings.text_llm_fallback_base_url,
+        api_key=settings.text_llm_fallback_api_key,
+    )
+    if fallback.provider and fallback.provider != "none" and fallback != primary:
+        return _call_provider(fallback, messages, temperature)
+    return None
+
+
+def _call_provider(
+    config: LlmConfig, messages: list[dict[str, str]], temperature: float
+) -> LlmResponse | None:
+    provider = config.provider
     if provider == "mock":
         return None
     if provider == "ollama":
-        return _call_ollama(messages, temperature)
+        return _call_ollama(config, messages, temperature)
 
     default_base, default_model, key_name = PROVIDER_DEFAULTS.get(
         provider, ("", "gpt-4o-mini", "LLM_API_KEY")
     )
-    base_url = (settings.llm_base_url or default_base).rstrip("/")
-    model = settings.llm_model or default_model
-    api_key = settings.llm_api_key or os.getenv(key_name, "")
+    base_url = (config.base_url or default_base).rstrip("/")
+    model = config.model or default_model
+    api_key = config.api_key or os.getenv(key_name, "")
     allow_no_key = provider in {"custom", "openai_compatible", "local_openai"}
     if not base_url or (not api_key and not allow_no_key):
         return None
@@ -65,12 +97,14 @@ def call_llm(messages: list[dict[str, str]], temperature: float = 0.2) -> LlmRes
         content = body["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError, TypeError, AttributeError):
         return None
-    return LlmResponse(content=content, used_provider=provider)
+    return LlmResponse(content=content, used_provider=f"{provider}/{model}")
 
 
-def _call_ollama(messages: list[dict[str, str]], temperature: float) -> LlmResponse | None:
-    base_url = (settings.llm_base_url or "http://127.0.0.1:11434").rstrip("/")
-    model = settings.llm_model or "qwen3-vl:30b"
+def _call_ollama(
+    config: LlmConfig, messages: list[dict[str, str]], temperature: float
+) -> LlmResponse | None:
+    base_url = (config.base_url or "http://127.0.0.1:11434").rstrip("/")
+    model = config.model or "qwen3-vl:30b"
     payload = {
         "model": model,
         "messages": messages,

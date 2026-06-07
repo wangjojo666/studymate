@@ -52,7 +52,7 @@ Base URL: `http://127.0.0.1:8000/api`
 
 `POST /courses/{course_id}/documents/{document_id}/ocr`
 
-对扫描版 PDF 调用本地 `qwen3-vl:30b` 做 OCR，并把识别结果切分入库。
+创建后台 OCR 任务。后端会调用本地 `qwen3-vl:30b` 做 OCR，并把识别结果切分入库。
 
 ```json
 {
@@ -60,6 +60,27 @@ Base URL: `http://127.0.0.1:8000/api`
   "max_pages": 10
 }
 ```
+
+返回 OCR 任务和资料状态：
+
+```json
+{
+  "id": 1,
+  "document_id": 2,
+  "status": "queued",
+  "start_page": 1,
+  "max_pages": 10,
+  "processed_pages": 0,
+  "document": {
+    "id": 2,
+    "status": "ocr_queued"
+  }
+}
+```
+
+`GET /courses/{course_id}/documents/{document_id}/ocr-jobs/{job_id}`
+
+查询 OCR 任务进度。`status` 可能是 `queued`、`running`、`completed`、`failed`。
 
 ## RAG Question Answering
 
@@ -77,7 +98,7 @@ Base URL: `http://127.0.0.1:8000/api`
 ```json
 {
   "answer": "根据课程资料，第三章重点包括……",
-  "provider": "ollama/qwen3-vl:30b",
+  "provider": "deepseek/deepseek-v4-flash",
   "sources": [
     {
       "document_name": "C++ 第三章.pdf",

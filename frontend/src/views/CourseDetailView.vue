@@ -40,13 +40,20 @@
                 {{ document.chunk_count }} 片段
               </span>
               <small v-if="document.error_message">{{ document.error_message }}</small>
+              <div v-if="activeOcrJob(document.id)" class="ocr-progress">
+                <el-progress
+                  :percentage="ocrProgress(activeOcrJob(document.id))"
+                  :status="ocrProgressStatus(activeOcrJob(document.id))"
+                />
+                <small>{{ ocrJobText(activeOcrJob(document.id)) }}</small>
+              </div>
             </div>
             <div class="document-actions">
               <el-tag :type="statusType(document.status)">{{ statusText(document.status) }}</el-tag>
               <el-button
-                v-if="document.status === 'needs_ocr'"
+                v-if="canRunOcr(document)"
                 size="small"
-                :loading="ocrRunningId === document.id"
+                :loading="ocrRunningId === document.id || document.status === 'ocr_queued' || document.status === 'ocr_processing'"
                 @click="runOcr(document)"
               >
                 OCR 入库
@@ -133,7 +140,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 
@@ -141,6 +148,7 @@ import {
   askCourse,
   generateOutline,
   generatePractice,
+  getOcrJob,
   getCourse,
   ocrDocument,
   uploadDocument
@@ -161,10 +169,13 @@ const outlineSources = ref([]);
 const practice = ref("");
 const practiceSources = ref([]);
 const practiceCount = ref(10);
-const lastProvider = ref("ollama/qwen3-vl:30b");
+const lastProvider = ref("deepseek/deepseek-v4-flash");
 const ocrRunningId = ref(null);
+const ocrJobs = ref({});
+const ocrPollTimer = ref(null);
 
 onMounted(loadCourse);
+onBeforeUnmount(stopOcrPolling);
 
 async function loadCourse() {
   loading.value = true;
@@ -197,15 +208,15 @@ async function handleUpload(options) {
 }
 
 async function runOcr(document) {
-  let value = "10";
+  let value = "1,10";
   try {
     const result = await ElMessageBox.prompt(
-      `这份 PDF 共 ${document.page_count} 页。建议先识别 5-10 页验证效果，单次最多 50 页。`,
+      `这份 PDF 共 ${document.page_count} 页。请输入“起始页,页数”，例如 1,10；继续识别可填 11,10。`,
       "扫描版 PDF OCR 入库",
       {
-        inputValue: "10",
-        inputPattern: /^([1-9]|[1-4][0-9]|50)$/,
-        inputErrorMessage: "请输入 1-50 之间的页数",
+        inputValue: "1,10",
+        inputPattern: /^\s*([1-9]\d*)\s*[,，]\s*([1-9]|[1-4][0-9]|50)\s*$/,
+        inputErrorMessage: "请输入类似 1,10 的格式，页数范围 1-50",
         confirmButtonText: "开始 OCR",
         cancelButtonText: "取消"
       }
@@ -217,20 +228,58 @@ async function runOcr(document) {
 
   ocrRunningId.value = document.id;
   try {
-    const result = await ocrDocument(props.id, document.id, {
-      start_page: 1,
-      max_pages: Number(value)
+    const [startPage, maxPages] = value.split(/[,，]/).map((item) => Number(item.trim()));
+    const job = await ocrDocument(props.id, document.id, {
+      start_page: startPage,
+      max_pages: maxPages
     });
+    setOcrJob(job);
+    startOcrPolling(job);
     await loadCourse();
-    if (result.status === "indexed") {
-      ElMessage.success(result.error_message || "OCR 入库完成");
-    } else {
-      ElMessage.warning(result.error_message || "OCR 未生成可检索片段");
-    }
+    ElMessage.info("OCR 后台任务已启动，可继续使用页面");
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "OCR 失败，请确认 Ollama 和 qwen3-vl:30b 已启动");
+    ElMessage.error(error.response?.data?.detail || "OCR 启动失败，请确认后端服务正常");
     await loadCourse();
-  } finally {
+    ocrRunningId.value = null;
+  }
+}
+
+function setOcrJob(job) {
+  ocrJobs.value = {
+    ...ocrJobs.value,
+    [job.document_id]: job
+  };
+}
+
+function startOcrPolling(job) {
+  stopOcrPolling();
+  pollOcrJob(job);
+  ocrPollTimer.value = window.setInterval(() => pollOcrJob(job), 2500);
+}
+
+function stopOcrPolling() {
+  if (ocrPollTimer.value) {
+    window.clearInterval(ocrPollTimer.value);
+    ocrPollTimer.value = null;
+  }
+}
+
+async function pollOcrJob(job) {
+  try {
+    const latest = await getOcrJob(props.id, job.document_id, job.id);
+    setOcrJob(latest);
+    if (latest.status === "completed" || latest.status === "failed") {
+      stopOcrPolling();
+      ocrRunningId.value = null;
+      await loadCourse();
+      if (latest.status === "completed") {
+        ElMessage.success(latest.error_message || "OCR 入库完成");
+      } else {
+        ElMessage.error(latest.error_message || "OCR 失败，请确认 Ollama 和视觉模型已启动");
+      }
+    }
+  } catch {
+    stopOcrPolling();
     ocrRunningId.value = null;
   }
 }
@@ -287,6 +336,7 @@ function statusText(status) {
     indexed: "已入库",
     processing: "解析中",
     needs_ocr: "需 OCR",
+    ocr_queued: "OCR 排队",
     ocr_processing: "OCR 中",
     failed: "失败",
     empty: "空文档"
@@ -298,10 +348,56 @@ function statusType(status) {
     indexed: "success",
     processing: "warning",
     needs_ocr: "warning",
+    ocr_queued: "warning",
     ocr_processing: "warning",
     failed: "danger",
     empty: "info"
   }[status] || "info";
+}
+
+function canRunOcr(document) {
+  if (document.file_type !== "pdf") {
+    return false;
+  }
+  if (document.status === "ocr_queued" || document.status === "ocr_processing") {
+    return false;
+  }
+  return document.status === "needs_ocr" || document.error_message?.includes("OCR");
+}
+
+function activeOcrJob(documentId) {
+  const job = ocrJobs.value[documentId];
+  if (!job || job.status === "completed") {
+    return null;
+  }
+  return job;
+}
+
+function ocrProgress(job) {
+  if (job.status === "completed") {
+    return 100;
+  }
+  return Math.min(100, Math.round((job.processed_pages / Math.max(1, job.max_pages)) * 100));
+}
+
+function ocrProgressStatus(job) {
+  if (job.status === "failed") {
+    return "exception";
+  }
+  if (job.status === "completed") {
+    return "success";
+  }
+  return undefined;
+}
+
+function ocrJobText(job) {
+  if (job.status === "queued") {
+    return "OCR 任务排队中";
+  }
+  if (job.status === "failed") {
+    return job.error_message || "OCR 失败";
+  }
+  return job.error_message || `已完成 ${job.processed_pages}/${job.max_pages} 页`;
 }
 
 function sourceKey(source) {

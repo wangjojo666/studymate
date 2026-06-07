@@ -311,6 +311,14 @@ textarea {
   color: #b42318;
 }
 
+.ocr-progress {
+  margin-top: 8px;
+}
+
+.ocr-progress small {
+  color: #475569;
+}
+
 .qa-panel {
   display: flex;
   flex-direction: column;

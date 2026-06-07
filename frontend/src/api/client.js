@@ -34,6 +34,11 @@ export async function ocrDocument(courseId, documentId, payload) {
   return data;
 }
 
+export async function getOcrJob(courseId, documentId, jobId) {
+  const { data } = await http.get(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}`);
+  return data;
+}
+
 export async function askCourse(courseId, question) {
   const { data } = await http.post(`/courses/${courseId}/ask`, {
     question,
