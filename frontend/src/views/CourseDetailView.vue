@@ -1,18 +1,19 @@
 <template>
   <div class="workspace course-detail" v-loading="loading">
-    <section class="toolbar-band">
+    <section class="course-hero">
       <div>
         <el-button text @click="router.push('/courses')">
           <el-icon><Back /></el-icon>
           返回课程
         </el-button>
+        <span class="eyebrow">Course Workspace</span>
         <h1>{{ course?.name || "课程详情" }}</h1>
-        <p>{{ course?.description || "上传课程资料后即可构建知识库。" }}</p>
+        <p>{{ course?.description || "上传课程资料后即可构建知识库和学习画像。" }}</p>
       </div>
       <div class="toolbar-actions">
         <el-button @click="router.push(`/courses/${props.id}/diagnosis`)">
           <el-icon><DataAnalysis /></el-icon>
-          学习诊断中心
+          AI 学习画像
         </el-button>
         <el-upload
           :show-file-list="false"
@@ -27,158 +28,209 @@
       </div>
     </section>
 
-    <section class="detail-grid">
-      <div class="documents-panel panel">
-        <div class="panel-title">
-          <h2>课程资料</h2>
-          <el-tag type="info">{{ course?.document_count || 0 }} 份</el-tag>
-        </div>
-        <el-empty v-if="!course?.documents?.length" description="暂无资料" />
-        <div v-else class="document-list">
-          <div v-for="document in course.documents" :key="document.id" class="document-item">
-            <div class="doc-icon">
-              <el-icon><Document /></el-icon>
-            </div>
+    <el-tabs v-model="activeTab" class="course-tabs">
+      <el-tab-pane label="资料库" name="docs">
+        <div class="panel">
+          <div class="panel-title">
             <div>
-              <strong>{{ document.original_filename }}</strong>
-              <span>
-                {{ document.file_type.toUpperCase() }} · {{ document.page_count }} 页 ·
-                {{ document.chunk_count }} 片段
-              </span>
-              <small v-if="document.error_message">{{ document.error_message }}</small>
-              <div v-if="activeOcrJob(document.id)" class="ocr-progress">
-                <el-progress
-                  :percentage="ocrProgress(activeOcrJob(document.id))"
-                  :status="ocrProgressStatus(activeOcrJob(document.id))"
-                />
-                <small>{{ ocrJobText(activeOcrJob(document.id)) }}</small>
+              <h2>课程资料</h2>
+              <span>扫描版 PDF 可先用快速索引模式入库</span>
+            </div>
+            <el-tag type="info">{{ course?.document_count || 0 }} 份</el-tag>
+          </div>
+          <el-empty v-if="!course?.documents?.length" description="暂无资料" />
+          <div v-else class="document-list">
+            <div v-for="document in course.documents" :key="document.id" class="document-item">
+              <div class="doc-icon">
+                <el-icon><Document /></el-icon>
               </div>
-            </div>
-            <div class="document-actions">
-              <el-tag :type="statusType(document.status)">{{ statusText(document.status) }}</el-tag>
-              <el-button
-                v-if="canRunOcr(document)"
-                size="small"
-                :loading="ocrRunningId === document.id || document.status === 'ocr_queued' || document.status === 'ocr_processing'"
-                @click="runOcr(document)"
-              >
-                OCR 入库
-              </el-button>
-              <el-button
-                v-if="activeOcrJob(document.id)"
-                size="small"
-                type="danger"
-                plain
-                @click="stopOcr(document)"
-              >
-                停止
-              </el-button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="qa-panel panel">
-        <div class="panel-title">
-          <h2>智能问答</h2>
-          <el-tag>{{ lastProvider }}</el-tag>
-        </div>
-        <div class="chat-area">
-          <div v-if="messages.length === 0" class="empty-chat">
-            <el-icon><ChatLineRound /></el-icon>
-            <span>向课程资料提问</span>
-          </div>
-          <div v-for="message in messages" :key="message.id" class="message-pair">
-            <div class="question">{{ message.question }}</div>
-            <div class="answer">
-              <pre>{{ message.answer }}</pre>
-              <div v-if="message.sources?.length" class="source-strip">
-                <button v-for="source in message.sources" :key="sourceKey(source)">
-                  《{{ source.document_name }}》P{{ source.page }}
-                </button>
+              <div>
+                <strong>{{ document.original_filename }}</strong>
+                <span>
+                  {{ document.file_type.toUpperCase() }} · {{ document.page_count }} 页 ·
+                  {{ document.chunk_count }} 片段
+                </span>
+                <small v-if="document.error_message">{{ document.error_message }}</small>
+                <div v-if="activeOcrJob(document.id)" class="ocr-progress">
+                  <el-progress
+                    :percentage="ocrProgress(activeOcrJob(document.id))"
+                    :status="ocrProgressStatus(activeOcrJob(document.id))"
+                  />
+                  <small>{{ ocrJobText(activeOcrJob(document.id)) }}</small>
+                </div>
+              </div>
+              <div class="document-actions">
+                <el-tag :type="statusType(document.status)">{{ statusText(document.status) }}</el-tag>
+                <el-button
+                  v-if="canRunOcr(document)"
+                  size="small"
+                  :loading="ocrRunningId === document.id || document.status === 'ocr_queued' || document.status === 'ocr_processing'"
+                  @click="runOcr(document)"
+                >
+                  OCR 入库
+                </el-button>
+                <el-button
+                  v-if="activeOcrJob(document.id)"
+                  size="small"
+                  type="danger"
+                  plain
+                  @click="stopOcr(document)"
+                >
+                  停止
+                </el-button>
               </div>
             </div>
           </div>
         </div>
-        <div class="ask-bar">
-          <el-input
-            v-model="question"
-            size="large"
-            placeholder="例如：第三章的重点是什么？"
-            @keyup.enter="ask"
-          />
-          <el-button type="primary" size="large" :loading="asking" @click="ask">
-            <el-icon><Promotion /></el-icon>
-            提问
-          </el-button>
-        </div>
-      </div>
-    </section>
+      </el-tab-pane>
 
-    <section class="material-grid">
-      <div class="panel material-panel">
-        <div class="panel-title">
-          <h2>复习提纲</h2>
-          <el-button :loading="generatingOutline" @click="makeOutline">
-            <el-icon><Memo /></el-icon>
-            生成
-          </el-button>
-        </div>
-        <pre>{{ outline || "待生成" }}</pre>
-        <div v-if="outlineSources.length" class="source-strip">
-          <button v-for="source in outlineSources" :key="sourceKey(source)">
-            《{{ source.document_name }}》P{{ source.page }}
-          </button>
-        </div>
-      </div>
-
-      <div class="panel material-panel">
-        <div class="panel-title">
-          <h2>练习题</h2>
-          <div class="inline-actions">
-            <el-select v-model="practiceDifficulty" size="small" class="practice-select">
-              <el-option label="基础题" value="basic" />
-              <el-option label="提高题" value="advanced" />
-              <el-option label="考试题" value="exam" />
-              <el-option label="易错题" value="mistake" />
-            </el-select>
-            <el-select
-              v-model="practiceKnowledgePointId"
-              size="small"
-              class="practice-select"
-              clearable
-              filterable
-              placeholder="知识点"
-            >
-              <el-option
-                v-for="point in knowledgePointOptions"
-                :key="point.id"
-                :label="point.name"
-                :value="point.id"
-              />
-            </el-select>
-            <el-input-number v-model="practiceCount" :min="1" :max="30" size="small" />
-            <el-button :loading="generatingPractice" @click="makePractice">
-              <el-icon><EditPen /></el-icon>
-              生成
+      <el-tab-pane label="AI 问答" name="qa">
+        <div class="qa-panel panel">
+          <div class="panel-title">
+            <div>
+              <h2>智能问答</h2>
+              <span>回答基于已入库课程片段，并展示来源页码</span>
+            </div>
+            <el-tag>{{ lastProvider }}</el-tag>
+          </div>
+          <div class="chat-area">
+            <div v-if="messages.length === 0" class="empty-chat">
+              <el-icon><ChatLineRound /></el-icon>
+              <span>向课程资料提问</span>
+            </div>
+            <div v-for="message in messages" :key="message.id" class="message-pair">
+              <div class="question">{{ message.question }}</div>
+              <div class="answer">
+                <pre>{{ message.answer }}</pre>
+                <div v-if="message.sources?.length" class="source-strip">
+                  <button v-for="source in message.sources" :key="sourceKey(source)">
+                    《{{ source.document_name }}》P{{ source.page }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="ask-bar">
+            <el-input
+              v-model="question"
+              size="large"
+              placeholder="例如：第六章空间解析几何的重点是什么？"
+              @keyup.enter="ask"
+            />
+            <el-button type="primary" size="large" :loading="asking" @click="ask">
+              <el-icon><Promotion /></el-icon>
+              提问
             </el-button>
           </div>
         </div>
-        <pre>{{ practice || "待生成" }}</pre>
-        <div v-if="practiceSources.length" class="source-strip">
-          <button v-for="source in practiceSources" :key="sourceKey(source)">
-            《{{ source.document_name }}》P{{ source.page }}
-          </button>
+      </el-tab-pane>
+
+      <el-tab-pane label="复习提纲" name="outline">
+        <div class="panel material-panel">
+          <div class="panel-title">
+            <div>
+              <h2>复习提纲</h2>
+              <span>自动整理核心概念、公式、易错点和可能考法</span>
+            </div>
+            <el-button :loading="generatingOutline" @click="makeOutline">
+              <el-icon><Memo /></el-icon>
+              生成
+            </el-button>
+          </div>
+          <pre>{{ outline || "待生成" }}</pre>
+          <div v-if="outlineSources.length" class="source-strip">
+            <button v-for="source in outlineSources" :key="sourceKey(source)">
+              《{{ source.document_name }}》P{{ source.page }}
+            </button>
+          </div>
         </div>
-      </div>
-    </section>
+      </el-tab-pane>
+
+      <el-tab-pane label="专项练习" name="practice">
+        <div class="panel material-panel">
+          <div class="panel-title">
+            <div>
+              <h2>专项练习</h2>
+              <span>按难度和知识点生成基础题、提高题、考试题或易错题</span>
+            </div>
+            <div class="inline-actions">
+              <el-select v-model="practiceDifficulty" size="small" class="practice-select">
+                <el-option label="基础题" value="basic" />
+                <el-option label="提高题" value="advanced" />
+                <el-option label="考试题" value="exam" />
+                <el-option label="易错题" value="mistake" />
+              </el-select>
+              <el-select
+                v-model="practiceKnowledgePointId"
+                size="small"
+                class="practice-select"
+                clearable
+                filterable
+                placeholder="知识点"
+              >
+                <el-option
+                  v-for="point in knowledgePointOptions"
+                  :key="point.id"
+                  :label="point.name"
+                  :value="point.id"
+                />
+              </el-select>
+              <el-input-number v-model="practiceCount" :min="1" :max="30" size="small" />
+              <el-button :loading="generatingPractice" @click="makePractice">
+                <el-icon><EditPen /></el-icon>
+                生成
+              </el-button>
+            </div>
+          </div>
+          <pre>{{ practice || "待生成" }}</pre>
+          <div v-if="practiceSources.length" class="source-strip">
+            <button v-for="source in practiceSources" :key="sourceKey(source)">
+              《{{ source.document_name }}》P{{ source.page }}
+            </button>
+          </div>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="学习诊断" name="diagnosis">
+        <div class="diagnosis-preview-grid">
+          <div class="panel">
+            <div class="panel-title">
+              <div>
+                <h2>总体掌握度</h2>
+                <span>根据提问、练习和错题动态更新</span>
+              </div>
+            </div>
+            <div class="mastery-ring compact" :style="ringStyle">
+              <span>{{ learningProfile?.summary.overall_mastery || 0 }}%</span>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">
+              <div>
+                <h2>薄弱知识点</h2>
+                <span>优先进入专项训练</span>
+              </div>
+              <el-button text @click="router.push(`/courses/${props.id}/diagnosis`)">完整诊断</el-button>
+            </div>
+            <div class="weak-list">
+              <div v-for="point in diagnosisWeakPoints" :key="point.id" class="weak-item">
+                <div>
+                  <strong>{{ point.name }}</strong>
+                  <span>{{ point.mastery_score }}% · 错题 {{ point.wrong_count }} 次</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import {
   askCourse,
@@ -194,6 +246,7 @@ import {
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
+const route = useRoute();
 const course = ref(null);
 const learningProfile = ref(null);
 const loading = ref(false);
@@ -201,6 +254,7 @@ const uploading = ref(false);
 const asking = ref(false);
 const generatingOutline = ref(false);
 const generatingPractice = ref(false);
+const activeTab = ref(tabFromQuery(route.query.tab));
 const question = ref("");
 const messages = ref([]);
 const outline = ref("");
@@ -214,10 +268,26 @@ const lastProvider = ref("deepseek/deepseek-v4-flash");
 const ocrRunningId = ref(null);
 const ocrJobs = ref({});
 const ocrPollTimer = ref(null);
+
 const knowledgePointOptions = computed(() => learningProfile.value?.knowledge_points || []);
+const diagnosisWeakPoints = computed(() => (learningProfile.value?.weak_points || []).slice(0, 5));
+const ringStyle = computed(() => {
+  const score = learningProfile.value?.summary.overall_mastery || 0;
+  const deg = Math.min(360, Math.max(0, score * 3.6));
+  return {
+    background: `conic-gradient(#16a34a 0deg ${deg}deg, #e5e7eb ${deg}deg 360deg)`
+  };
+});
 
 onMounted(loadCourse);
 onBeforeUnmount(stopOcrPolling);
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    activeTab.value = tabFromQuery(tab);
+  }
+);
 
 async function loadCourse() {
   loading.value = true;
@@ -258,7 +328,7 @@ async function runOcr(document) {
   let value = nextOcrInput(document);
   try {
     const result = await ElMessageBox.prompt(
-      `这份 PDF 共 ${document.page_count} 页。请输入“起始页,页数,模式”。模式建议用 fast，例如 40,8,fast；需要逐字 OCR 时用 full。`,
+      `这份 PDF 共 ${document.page_count} 页。请输入“起始页,页数,模式”，例如 40,8,fast；需要逐字 OCR 时用 full。`,
       "扫描版 PDF OCR 入库",
       {
         inputValue: value,
@@ -334,13 +404,13 @@ async function pollOcrJob(job) {
   try {
     const latest = await getOcrJob(props.id, job.document_id, job.id);
     setOcrJob(latest);
-    if (latest.status === "completed" || latest.status === "failed") {
+    if (["completed", "failed", "cancelled"].includes(latest.status)) {
       stopOcrPolling();
       ocrRunningId.value = null;
       await loadCourse();
       if (latest.status === "completed") {
         ElMessage.success(latest.error_message || "OCR 入库完成");
-      } else {
+      } else if (latest.status === "failed") {
         ElMessage.error(latest.error_message || "OCR 失败，请确认 Ollama 和视觉模型已启动");
       }
     }
@@ -427,12 +497,8 @@ function statusType(status) {
 }
 
 function canRunOcr(document) {
-  if (document.file_type !== "pdf") {
-    return false;
-  }
-  if (document.status === "ocr_queued" || document.status === "ocr_processing") {
-    return false;
-  }
+  if (document.file_type !== "pdf") return false;
+  if (document.status === "ocr_queued" || document.status === "ocr_processing") return false;
   return document.status === "needs_ocr" || document.error_message?.includes("OCR");
 }
 
@@ -444,40 +510,32 @@ function nextOcrInput(document) {
 
 function activeOcrJob(documentId) {
   const job = ocrJobs.value[documentId];
-  if (!job || ["completed", "failed", "cancelled"].includes(job.status)) {
-    return null;
-  }
+  if (!job || ["completed", "failed", "cancelled"].includes(job.status)) return null;
   return job;
 }
 
 function ocrProgress(job) {
-  if (job.status === "completed") {
-    return 100;
-  }
+  if (job.status === "completed") return 100;
   return Math.min(100, Math.round((job.processed_pages / Math.max(1, job.max_pages)) * 100));
 }
 
 function ocrProgressStatus(job) {
-  if (job.status === "failed") {
-    return "exception";
-  }
-  if (job.status === "completed") {
-    return "success";
-  }
+  if (job.status === "failed") return "exception";
+  if (job.status === "completed") return "success";
   return undefined;
 }
 
 function ocrJobText(job) {
-  if (job.status === "queued") {
-    return "OCR 任务排队中";
-  }
-  if (job.status === "failed") {
-    return job.error_message || "OCR 失败";
-  }
+  if (job.status === "queued") return "OCR 任务排队中";
+  if (job.status === "failed") return job.error_message || "OCR 失败";
   return job.error_message || `已完成 ${job.processed_pages}/${job.max_pages} 页`;
 }
 
 function sourceKey(source) {
   return `${source.document_id}-${source.page}-${source.chunk_index}`;
+}
+
+function tabFromQuery(tab) {
+  return ["docs", "qa", "outline", "practice", "diagnosis"].includes(tab) ? tab : "qa";
 }
 </script>
