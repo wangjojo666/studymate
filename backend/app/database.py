@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from sqlalchemy import create_engine
+from datetime import datetime
+
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import settings
@@ -29,16 +31,22 @@ def init_database() -> None:
 
     from app.models.entities import (  # noqa: F401
         ChatMessage,
+        ChunkKnowledgePoint,
         Course,
         Document,
         DocumentChunk,
         GeneratedMaterial,
+        KnowledgePoint,
         OcrJob,
+        QuestionAttempt,
+        ReviewTask,
+        UserKnowledgeStatus,
     )
 
     Base.metadata.create_all(bind=engine)
 
     with SessionLocal() as db:
+        _mark_interrupted_ocr_jobs(db)
         if db.query(Course).count() == 0:
             db.add_all(
                 [
@@ -48,3 +56,20 @@ def init_database() -> None:
                 ]
             )
             db.commit()
+
+
+def _mark_interrupted_ocr_jobs(db: Session) -> None:
+    from app.models.entities import Document, OcrJob
+
+    jobs = db.query(OcrJob).filter(OcrJob.status.in_(("queued", "running"))).all()
+    if not jobs:
+        return
+    for job in jobs:
+        document = db.get(Document, job.document_id)
+        job.status = "failed"
+        job.finished_at = datetime.utcnow()
+        job.error_message = "OCR 任务因服务重启已中断，请使用快速索引模式重新开始。"
+        if document:
+            document.status = "indexed" if document.chunk_count else "needs_ocr"
+            document.error_message = job.error_message
+    db.commit()

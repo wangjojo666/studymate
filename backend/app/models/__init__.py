@@ -1,3 +1,27 @@
-from app.models.entities import ChatMessage, Course, Document, DocumentChunk, GeneratedMaterial
+from app.models.entities import (
+    ChatMessage,
+    ChunkKnowledgePoint,
+    Course,
+    Document,
+    DocumentChunk,
+    GeneratedMaterial,
+    KnowledgePoint,
+    OcrJob,
+    QuestionAttempt,
+    ReviewTask,
+    UserKnowledgeStatus,
+)
 
-__all__ = ["ChatMessage", "Course", "Document", "DocumentChunk", "GeneratedMaterial"]
+__all__ = [
+    "ChatMessage",
+    "ChunkKnowledgePoint",
+    "Course",
+    "Document",
+    "DocumentChunk",
+    "GeneratedMaterial",
+    "KnowledgePoint",
+    "OcrJob",
+    "QuestionAttempt",
+    "ReviewTask",
+    "UserKnowledgeStatus",
+]

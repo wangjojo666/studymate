@@ -39,6 +39,11 @@ export async function getOcrJob(courseId, documentId, jobId) {
   return data;
 }
 
+export async function cancelOcrJob(courseId, documentId, jobId) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}/cancel`);
+  return data;
+}
+
 export async function askCourse(courseId, question) {
   const { data } = await http.post(`/courses/${courseId}/ask`, {
     question,
@@ -52,7 +57,38 @@ export async function generateOutline(courseId) {
   return data;
 }
 
-export async function generatePractice(courseId, count) {
-  const { data } = await http.post(`/courses/${courseId}/practice`, { count });
+export async function generatePractice(courseId, payload) {
+  const request = typeof payload === "number" ? { count: payload } : payload;
+  const { data } = await http.post(`/courses/${courseId}/practice`, request);
+  return data;
+}
+
+export async function getLearningProfile(courseId) {
+  const { data } = await http.get(`/courses/${courseId}/learning/profile`);
+  return data;
+}
+
+export async function getKnowledgeGraph(courseId) {
+  const { data } = await http.get(`/courses/${courseId}/learning/graph`);
+  return data;
+}
+
+export async function getWrongAttempts(courseId) {
+  const { data } = await http.get(`/courses/${courseId}/learning/wrong-attempts`);
+  return data;
+}
+
+export async function submitPracticeAttempt(courseId, payload) {
+  const { data } = await http.post(`/courses/${courseId}/learning/attempts`, payload);
+  return data;
+}
+
+export async function generateReviewPlan(courseId, payload) {
+  const { data } = await http.post(`/courses/${courseId}/learning/review-plan`, payload);
+  return data;
+}
+
+export async function updateReviewTask(courseId, taskId, status) {
+  const { data } = await http.patch(`/courses/${courseId}/learning/tasks/${taskId}`, { status });
   return data;
 }

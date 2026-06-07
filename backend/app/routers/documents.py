@@ -14,11 +14,17 @@ from app.models.entities import Course, Document, OcrJob
 from app.schemas import OcrRequest
 from app.services.chunker import split_pages_into_chunks
 from app.services.document_parser import parse_document
+from app.services.learning_service import sync_course_knowledge_points
 from app.services.ocr_service import ocr_pdf_with_qwen_vl
 from app.services.vector_store import index_document_chunks
 
 
 router = APIRouter(prefix="/courses/{course_id}/documents", tags=["documents"])
+
+OCR_MODE_LABELS = {
+    "fast": "快速索引",
+    "full": "精确 OCR",
+}
 
 
 @router.post("")
@@ -62,6 +68,7 @@ def upload_document(
         document.page_count = len(pages)
         index_document_chunks(db, document, chunks)
         _finalize_parse_status(document, suffix, bool(chunks), bool(pages))
+        sync_course_knowledge_points(db, course_id, document.id)
         db.commit()
         db.refresh(document)
     except Exception as exc:  # noqa: BLE001 - return parser errors to the UI.
@@ -125,8 +132,13 @@ def ocr_document(
     )
     db.add(job)
     document.status = "ocr_queued"
+    mode_label = OCR_MODE_LABELS.get(payload.mode, "快速索引")
+    job.error_message = (
+        f"[mode:{payload.mode}] {mode_label}任务已加入后台队列：从第 {payload.start_page} 页开始，"
+        f"最多处理 {payload.max_pages} 页。"
+    )
     document.error_message = (
-        f"OCR 任务已加入后台队列：从第 {payload.start_page} 页开始，最多识别 {payload.max_pages} 页。"
+        f"{mode_label}任务已加入后台队列：从第 {payload.start_page} 页开始，最多处理 {payload.max_pages} 页。"
     )
     db.commit()
     db.refresh(job)
@@ -147,6 +159,28 @@ def get_ocr_job(course_id: int, document_id: int, job_id: int, db: Session = Dep
     return _ocr_job_payload(job, document)
 
 
+@router.post("/{document_id}/ocr-jobs/{job_id}/cancel")
+def cancel_ocr_job(course_id: int, document_id: int, job_id: int, db: Session = Depends(get_db)) -> dict:
+    job = db.get(OcrJob, job_id)
+    if job is None or job.course_id != course_id or job.document_id != document_id:
+        raise HTTPException(status_code=404, detail="OCR 任务不存在")
+    document = db.get(Document, document_id)
+    if document is None or document.course_id != course_id:
+        raise HTTPException(status_code=404, detail="资料不存在")
+    if job.status in {"completed", "failed", "cancelled"}:
+        return _ocr_job_payload(job, document)
+
+    job.status = "cancelled"
+    job.finished_at = datetime.utcnow()
+    job.error_message = f"OCR 已停止，已保留 {job.processed_pages} 页识别结果。"
+    document.status = "indexed" if document.chunk_count else "needs_ocr"
+    document.error_message = job.error_message
+    db.commit()
+    db.refresh(job)
+    db.refresh(document)
+    return _ocr_job_payload(job, document)
+
+
 def _run_ocr_job(job_id: int) -> None:
     with SessionLocal() as db:
         job = db.get(OcrJob, job_id)
@@ -163,13 +197,36 @@ def _run_ocr_job(job_id: int) -> None:
         job.status = "running"
         job.current_page = job.start_page
         job.total_pages = document.page_count
+        mode = _ocr_mode_from_message(job.error_message)
+        mode_label = OCR_MODE_LABELS.get(mode, "快速索引")
         document.status = "ocr_processing"
         document.error_message = (
-            f"正在后台 OCR：从第 {job.start_page} 页开始，最多识别 {job.max_pages} 页。"
+            f"正在后台{mode_label}：从第 {job.start_page} 页开始，最多处理 {job.max_pages} 页。"
         )
+        job.error_message = f"[mode:{mode}] {document.error_message}"
         db.commit()
 
+        def should_stop() -> bool:
+            db.refresh(job)
+            return job.status == "cancelled"
+
+        def mark_page_start(page_number: int) -> None:
+            db.refresh(job)
+            if job.status == "cancelled":
+                return
+            job.current_page = page_number
+            job.error_message = (
+                f"[mode:{mode}] 正在{mode_label}第 {page_number} 页，"
+                f"已完成 {job.processed_pages}/{job.max_pages} 页。"
+            )
+            document.status = "ocr_processing"
+            document.error_message = job.error_message.replace(f"[mode:{mode}] ", "", 1)
+            db.commit()
+
         def mark_page_done(page_number: int, text: str) -> None:
+            db.refresh(job)
+            if job.status == "cancelled":
+                return
             page_chunks = split_pages_into_chunks([(page_number, text)])
             index_document_chunks(
                 db,
@@ -181,9 +238,12 @@ def _run_ocr_job(job_id: int) -> None:
             job.current_page = page_number
             job.processed_pages += 1
             job.chunk_count += len(page_chunks)
-            job.error_message = f"已识别到第 {page_number} 页，共完成 {job.processed_pages} 页。"
+            job.error_message = (
+                f"[mode:{mode}] 已处理到第 {page_number} 页，"
+                f"共完成 {job.processed_pages}/{job.max_pages} 页。"
+            )
             document.status = "ocr_processing"
-            document.error_message = job.error_message
+            document.error_message = job.error_message.replace(f"[mode:{mode}] ", "", 1)
             db.commit()
 
         try:
@@ -191,8 +251,18 @@ def _run_ocr_job(job_id: int) -> None:
                 Path(document.file_path),
                 start_page=job.start_page,
                 max_pages=job.max_pages,
+                mode=mode,
                 on_page_done=mark_page_done,
+                on_page_start=mark_page_start,
+                should_stop=should_stop,
             )
+            db.refresh(job)
+            if job.status == "cancelled":
+                document.status = "indexed" if document.chunk_count else "needs_ocr"
+                document.error_message = f"OCR 已停止，已保留 {job.processed_pages} 页识别结果。"
+                job.error_message = document.error_message
+                db.commit()
+                return
             chunks = split_pages_into_chunks(result.pages)
             document.page_count = result.total_pages
             index_document_chunks(
@@ -202,6 +272,7 @@ def _run_ocr_job(job_id: int) -> None:
                 replace_document=False,
                 replace_page_numbers=[page_number for page_number, _text in result.pages],
             )
+            sync_course_knowledge_points(db, document.course_id, document.id)
             job.status = "completed"
             job.total_pages = result.total_pages
             job.processed_pages = result.processed_pages
@@ -210,7 +281,7 @@ def _run_ocr_job(job_id: int) -> None:
             if document.chunk_count:
                 document.status = "indexed"
                 document.error_message = (
-                    f"OCR 已识别第 {job.start_page} 页起的 {result.processed_pages} 页，"
+                    f"{mode_label}已处理第 {job.start_page} 页起的 {result.processed_pages} 页，"
                     f"新增 {len(chunks)} 个知识片段。"
                 )
             else:
@@ -259,6 +330,12 @@ def _document_payload(document: Document) -> dict:
         "created_at": document.created_at,
         "updated_at": document.updated_at,
     }
+
+
+def _ocr_mode_from_message(message: str) -> str:
+    if "[mode:full]" in (message or ""):
+        return "full"
+    return "fast"
 
 
 def _ocr_job_payload(job: OcrJob, document: Document) -> dict:

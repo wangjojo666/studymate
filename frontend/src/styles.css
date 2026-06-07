@@ -134,6 +134,12 @@ textarea {
   color: #667085;
 }
 
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -433,6 +439,237 @@ pre {
   gap: 8px;
 }
 
+.practice-select {
+  width: 128px;
+}
+
+.diagnosis-view .metrics-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.diagnosis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.mastery-panel {
+  grid-column: span 2;
+}
+
+.mastery-overview {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+}
+
+.mastery-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+}
+
+.mastery-ring::after {
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  content: "";
+}
+
+.mastery-ring span {
+  position: relative;
+  z-index: 1;
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.mastery-bars,
+.weak-list,
+.recommendation-list,
+.wrong-list,
+.task-list,
+.edge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mastery-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(140px, 1fr) 56px;
+  gap: 10px;
+  align-items: center;
+}
+
+.mastery-row strong,
+.mastery-row small {
+  display: block;
+}
+
+.mastery-row small,
+.weak-item span,
+.recommendation-item span,
+.wrong-item span,
+.wrong-item small,
+.task-item span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5eaf0;
+}
+
+.progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #f59e0b;
+}
+
+.progress-track i.solid {
+  background: #16a34a;
+}
+
+.progress-track i.weak {
+  background: #dc2626;
+}
+
+.weak-item,
+.recommendation-item,
+.wrong-item,
+.task-item {
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.weak-item,
+.task-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+}
+
+.weak-item strong,
+.weak-item span,
+.task-item strong,
+.task-item span {
+  display: block;
+}
+
+.recommendation-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+}
+
+.recommendation-item b {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: #ffffff;
+  background: #2563eb;
+}
+
+.recommendation-item strong,
+.recommendation-item span {
+  display: block;
+}
+
+.recommendation-item p,
+.wrong-item p,
+.task-item p {
+  margin: 6px 0 0;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.graph-node-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.graph-node {
+  min-height: 32px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 5px 11px;
+  color: #334155;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.graph-node.solid {
+  border-color: #86efac;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.graph-node.weak {
+  border-color: #fecaca;
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.edge-list {
+  margin-top: 14px;
+}
+
+.edge-list span {
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: #475569;
+  background: #eef2f7;
+  font-size: 12px;
+}
+
+.lower-grid {
+  align-items: start;
+}
+
+.attempt-form,
+.review-form {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5eaf0;
+}
+
+.attempt-form-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.wrong-item {
+  padding: 12px;
+}
+
+.wrong-item strong,
+.wrong-item span,
+.wrong-item small {
+  display: block;
+}
+
+.wrong-item small + small {
+  margin-top: 4px;
+}
+
 .login-layout {
   display: grid;
   grid-template-columns: minmax(320px, 430px) minmax(320px, 1fr);
@@ -531,7 +768,19 @@ pre {
 
   .detail-grid,
   .material-grid,
+  .diagnosis-view .metrics-grid,
+  .diagnosis-grid,
   .login-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .mastery-panel {
+    grid-column: auto;
+  }
+
+  .mastery-overview,
+  .attempt-form-row,
+  .mastery-row {
     grid-template-columns: 1fr;
   }
 }
@@ -549,6 +798,19 @@ pre {
 
   .ask-bar {
     grid-template-columns: 1fr;
+  }
+
+  .toolbar-actions,
+  .inline-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .practice-select,
+  .toolbar-actions .el-button,
+  .toolbar-actions .el-upload,
+  .inline-actions .el-button {
+    width: 100%;
   }
 
   .question,

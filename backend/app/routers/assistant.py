@@ -27,7 +27,13 @@ def create_review_outline(course_id: int, db: Session = Depends(get_db)) -> dict
 @router.post("/practice")
 def create_practice(course_id: int, payload: PracticeRequest, db: Session = Depends(get_db)) -> dict:
     _ensure_course(db, course_id)
-    return generate_practice(db, course_id, payload.count)
+    return generate_practice(
+        db,
+        course_id,
+        payload.count,
+        difficulty=payload.difficulty,
+        knowledge_point_id=payload.knowledge_point_id,
+    )
 
 
 def _ensure_course(db: Session, course_id: int) -> Course:

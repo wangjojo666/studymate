@@ -9,16 +9,22 @@
         <h1>{{ course?.name || "课程详情" }}</h1>
         <p>{{ course?.description || "上传课程资料后即可构建知识库。" }}</p>
       </div>
-      <el-upload
-        :show-file-list="false"
-        :http-request="handleUpload"
-        accept=".pdf,.pptx,.docx,.txt"
-      >
-        <el-button type="primary" :loading="uploading">
-          <el-icon><Upload /></el-icon>
-          上传资料
+      <div class="toolbar-actions">
+        <el-button @click="router.push(`/courses/${props.id}/diagnosis`)">
+          <el-icon><DataAnalysis /></el-icon>
+          学习诊断中心
         </el-button>
-      </el-upload>
+        <el-upload
+          :show-file-list="false"
+          :http-request="handleUpload"
+          accept=".pdf,.pptx,.docx,.txt"
+        >
+          <el-button type="primary" :loading="uploading">
+            <el-icon><Upload /></el-icon>
+            上传资料
+          </el-button>
+        </el-upload>
+      </div>
     </section>
 
     <section class="detail-grid">
@@ -57,6 +63,15 @@
                 @click="runOcr(document)"
               >
                 OCR 入库
+              </el-button>
+              <el-button
+                v-if="activeOcrJob(document.id)"
+                size="small"
+                type="danger"
+                plain
+                @click="stopOcr(document)"
+              >
+                停止
               </el-button>
             </div>
           </div>
@@ -121,6 +136,27 @@
         <div class="panel-title">
           <h2>练习题</h2>
           <div class="inline-actions">
+            <el-select v-model="practiceDifficulty" size="small" class="practice-select">
+              <el-option label="基础题" value="basic" />
+              <el-option label="提高题" value="advanced" />
+              <el-option label="考试题" value="exam" />
+              <el-option label="易错题" value="mistake" />
+            </el-select>
+            <el-select
+              v-model="practiceKnowledgePointId"
+              size="small"
+              class="practice-select"
+              clearable
+              filterable
+              placeholder="知识点"
+            >
+              <el-option
+                v-for="point in knowledgePointOptions"
+                :key="point.id"
+                :label="point.name"
+                :value="point.id"
+              />
+            </el-select>
             <el-input-number v-model="practiceCount" :min="1" :max="30" size="small" />
             <el-button :loading="generatingPractice" @click="makePractice">
               <el-icon><EditPen /></el-icon>
@@ -140,14 +176,16 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 
 import {
   askCourse,
+  cancelOcrJob,
   generateOutline,
   generatePractice,
+  getLearningProfile,
   getOcrJob,
   getCourse,
   ocrDocument,
@@ -157,6 +195,7 @@ import {
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
 const course = ref(null);
+const learningProfile = ref(null);
 const loading = ref(false);
 const uploading = ref(false);
 const asking = ref(false);
@@ -169,10 +208,13 @@ const outlineSources = ref([]);
 const practice = ref("");
 const practiceSources = ref([]);
 const practiceCount = ref(10);
+const practiceDifficulty = ref("basic");
+const practiceKnowledgePointId = ref(null);
 const lastProvider = ref("deepseek/deepseek-v4-flash");
 const ocrRunningId = ref(null);
 const ocrJobs = ref({});
 const ocrPollTimer = ref(null);
+const knowledgePointOptions = computed(() => learningProfile.value?.knowledge_points || []);
 
 onMounted(loadCourse);
 onBeforeUnmount(stopOcrPolling);
@@ -180,7 +222,12 @@ onBeforeUnmount(stopOcrPolling);
 async function loadCourse() {
   loading.value = true;
   try {
-    course.value = await getCourse(props.id);
+    const [courseData, profileData] = await Promise.all([
+      getCourse(props.id),
+      getLearningProfile(props.id)
+    ]);
+    course.value = courseData;
+    learningProfile.value = profileData;
   } finally {
     loading.value = false;
   }
@@ -208,15 +255,15 @@ async function handleUpload(options) {
 }
 
 async function runOcr(document) {
-  let value = "1,10";
+  let value = nextOcrInput(document);
   try {
     const result = await ElMessageBox.prompt(
-      `这份 PDF 共 ${document.page_count} 页。请输入“起始页,页数”，例如 1,10；继续识别可填 11,10。`,
+      `这份 PDF 共 ${document.page_count} 页。请输入“起始页,页数,模式”。模式建议用 fast，例如 40,8,fast；需要逐字 OCR 时用 full。`,
       "扫描版 PDF OCR 入库",
       {
-        inputValue: "1,10",
-        inputPattern: /^\s*([1-9]\d*)\s*[,，]\s*([1-9]|[1-4][0-9]|50)\s*$/,
-        inputErrorMessage: "请输入类似 1,10 的格式，页数范围 1-50",
+        inputValue: value,
+        inputPattern: /^\s*([1-9]\d*)\s*[,，]\s*([1-9]|[1-4][0-9]|50)(\s*[,，]\s*(fast|full))?\s*$/,
+        inputErrorMessage: "请输入类似 40,8,fast 的格式，模式可选 fast 或 full",
         confirmButtonText: "开始 OCR",
         cancelButtonText: "取消"
       }
@@ -228,10 +275,14 @@ async function runOcr(document) {
 
   ocrRunningId.value = document.id;
   try {
-    const [startPage, maxPages] = value.split(/[,，]/).map((item) => Number(item.trim()));
+    const parts = value.split(/[,，]/).map((item) => item.trim());
+    const startPage = Number(parts[0]);
+    const maxPages = Number(parts[1]);
+    const mode = parts[2] || "fast";
     const job = await ocrDocument(props.id, document.id, {
       start_page: startPage,
-      max_pages: maxPages
+      max_pages: maxPages,
+      mode
     });
     setOcrJob(job);
     startOcrPolling(job);
@@ -241,6 +292,21 @@ async function runOcr(document) {
     ElMessage.error(error.response?.data?.detail || "OCR 启动失败，请确认后端服务正常");
     await loadCourse();
     ocrRunningId.value = null;
+  }
+}
+
+async function stopOcr(document) {
+  const job = activeOcrJob(document.id);
+  if (!job) return;
+  try {
+    const latest = await cancelOcrJob(props.id, document.id, job.id);
+    setOcrJob(latest);
+    stopOcrPolling();
+    ocrRunningId.value = null;
+    await loadCourse();
+    ElMessage.success(latest.error_message || "OCR 已停止");
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "停止 OCR 失败");
   }
 }
 
@@ -322,10 +388,15 @@ async function makeOutline() {
 async function makePractice() {
   generatingPractice.value = true;
   try {
-    const result = await generatePractice(props.id, practiceCount.value);
+    const result = await generatePractice(props.id, {
+      count: practiceCount.value,
+      difficulty: practiceDifficulty.value,
+      knowledge_point_id: practiceKnowledgePointId.value || null
+    });
     lastProvider.value = result.provider;
     practice.value = result.content;
     practiceSources.value = result.sources;
+    await loadCourse();
   } finally {
     generatingPractice.value = false;
   }
@@ -365,9 +436,15 @@ function canRunOcr(document) {
   return document.status === "needs_ocr" || document.error_message?.includes("OCR");
 }
 
+function nextOcrInput(document) {
+  const job = activeOcrJob(document.id);
+  const start = job?.current_page ? Math.min(document.page_count, job.current_page + 1) : 1;
+  return `${start},8,fast`;
+}
+
 function activeOcrJob(documentId) {
   const job = ocrJobs.value[documentId];
-  if (!job || job.status === "completed") {
+  if (!job || ["completed", "failed", "cancelled"].includes(job.status)) {
     return null;
   }
   return job;

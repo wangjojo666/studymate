@@ -5,13 +5,16 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.entities import ChatMessage, Course, Document, GeneratedMaterial
+from app.models.entities import ChatMessage, Course, Document, GeneratedMaterial, KnowledgePoint
+from app.services.learning_service import DIFFICULTY_LABELS, sync_course_knowledge_points
 from app.services.llm_service import call_llm, offline_answer, offline_outline, offline_practice
 from app.services.vector_store import SearchResult, get_representative_chunks, search_course
 
 
 def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) -> dict:
     sources = search_course(db, course_id, question, top_k)
+    if not sources:
+        sources = get_representative_chunks(db, course_id, top_k)
     context = _build_context(sources)
     if sources:
         messages = [
@@ -70,24 +73,54 @@ def generate_outline(db: Session, course_id: int) -> dict:
     return _save_material(db, course_id, "outline", content, sources, llm_response.used_provider if llm_response else "mock")
 
 
-def generate_practice(db: Session, course_id: int, count: int) -> dict:
-    sources = search_course(db, course_id, "选择题 填空题 简答题 重点 练习", 10)
+def generate_practice(
+    db: Session,
+    course_id: int,
+    count: int,
+    difficulty: str = "basic",
+    knowledge_point_id: int | None = None,
+) -> dict:
+    sync_course_knowledge_points(db, course_id)
+    focus_point = _get_focus_point(db, course_id, knowledge_point_id)
+    focus_name = focus_point.name if focus_point else ""
+    difficulty_label = DIFFICULTY_LABELS.get(difficulty, "基础题")
+    query = f"{focus_name} {difficulty_label} 选择题 填空题 简答题 重点 练习 易错点"
+    sources = search_course(db, course_id, query, 10)
     if not sources:
         sources = get_representative_chunks(db, course_id, 10)
     context = _build_context(sources)
+    focus_instruction = f"重点围绕知识点“{focus_name}”。" if focus_name else "覆盖课程资料中的核心知识点。"
     messages = [
         {
             "role": "system",
             "content": (
-                "你是课程练习题生成助手。请只根据资料生成题目，题型覆盖选择题、填空题、"
-                "简答题，并给出答案和简短解析。输出中文 Markdown。"
+                "你是课程自适应练习题生成助手。请只根据资料生成题目，题型覆盖选择题、填空题、"
+                "简答题，并给出答案、解析、关联知识点和常见错因。输出中文 Markdown。"
             ),
         },
-        {"role": "user", "content": f"请生成 {count} 道练习题。\n\n课程资料片段：\n{context}"},
+        {
+            "role": "user",
+            "content": (
+                f"请生成 {count} 道{difficulty_label}。{focus_instruction}\n"
+                "如果是易错题，请突出误区辨析和变式训练；如果是考试题，请提高综合性。\n\n"
+                f"课程资料片段：\n{context}"
+            ),
+        },
     ]
     llm_response = call_llm(messages)
-    content = llm_response.content if llm_response else offline_practice(context, count)
-    return _save_material(db, course_id, "practice", content, sources, llm_response.used_provider if llm_response else "mock")
+    content = (
+        llm_response.content
+        if llm_response
+        else offline_practice(context, count, difficulty_label=difficulty_label, focus_name=focus_name)
+    )
+    return _save_material(
+        db,
+        course_id,
+        f"practice:{difficulty}",
+        content,
+        sources,
+        llm_response.used_provider if llm_response else "mock",
+    )
 
 
 def _save_material(
@@ -150,3 +183,12 @@ def _empty_knowledge_base_message(db: Session, course_id: int) -> str:
     if any(document.status == "failed" for document in documents):
         return "资料上传后解析失败，请查看资料卡片上的错误提示，处理后重新上传。"
     return "当前课程资料还没有生成可检索片段。请确认文件中包含可复制的文本内容。"
+
+
+def _get_focus_point(db: Session, course_id: int, knowledge_point_id: int | None) -> KnowledgePoint | None:
+    if knowledge_point_id is None:
+        return None
+    point = db.get(KnowledgePoint, knowledge_point_id)
+    if point is None or point.course_id != course_id:
+        return None
+    return point

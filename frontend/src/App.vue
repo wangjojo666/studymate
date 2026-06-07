@@ -7,7 +7,7 @@
         </div>
         <div>
           <strong>StudyMate</strong>
-          <span>课程资料复习</span>
+          <span>个性化复习诊断</span>
         </div>
       </div>
 
@@ -32,7 +32,7 @@
       <el-header height="64px" class="topbar">
         <div>
           <strong>{{ pageTitle }}</strong>
-          <span>RAG 问答 · 来源引用 · 复习资料生成</span>
+        <span>RAG 问答 · 掌握度评估 · 自适应复习</span>
         </div>
       </el-header>
       <el-main class="main-content">
@@ -50,6 +50,7 @@ const route = useRoute();
 const activePath = computed(() => (route.path.startsWith("/courses") ? "/courses" : route.path));
 const pageTitle = computed(() => {
   if (route.path === "/login") return "演示登录";
+  if (route.path.endsWith("/diagnosis")) return "学习诊断中心";
   if (route.path.startsWith("/courses/")) return "课程详情";
   return "课程知识库";
 });

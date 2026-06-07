@@ -167,7 +167,12 @@ def offline_outline(context: str) -> str:
     )
 
 
-def offline_practice(context: str, count: int) -> str:
+def offline_practice(
+    context: str,
+    count: int,
+    difficulty_label: str = "基础题",
+    focus_name: str = "",
+) -> str:
     if not context.strip():
         return "当前课程还没有可用于生成练习题的资料。"
     sentences = _split_sentences(context)
@@ -178,22 +183,23 @@ def offline_practice(context: str, count: int) -> str:
     for index in range(count):
         basis = sentences[index % len(sentences)]
         qtype = question_types[index % len(question_types)]
+        focus_prefix = f"【{difficulty_label}｜{focus_name}】" if focus_name else f"【{difficulty_label}】"
         if qtype == "选择题":
             block = (
-                f"{index + 1}. 【选择题】根据资料，下面哪一项最接近原文重点？\n"
+                f"{index + 1}. {focus_prefix}【选择题】根据资料，下面哪一项最接近原文重点？\n"
                 f"A. {basis[:46]}\nB. 与课程资料无关的说法\nC. 只记结论不需要理解条件\nD. 与原文相反的表述\n"
-                f"答案：A\n解析：题干依据资料片段“{basis[:70]}”。"
+                f"答案：A\n解析：题干依据资料片段“{basis[:70]}”。\n常见错因：概念边界不清。"
             )
         elif qtype == "填空题":
             keyword = _first_keyword(basis)
             block = (
-                f"{index + 1}. 【填空题】资料中强调的关键词之一是：____。\n"
-                f"答案：{keyword}\n解析：该关键词来自资料片段“{basis[:70]}”。"
+                f"{index + 1}. {focus_prefix}【填空题】资料中强调的关键词之一是：____。\n"
+                f"答案：{keyword}\n解析：该关键词来自资料片段“{basis[:70]}”。\n常见错因：公式或关键词记忆不准确。"
             )
         else:
             block = (
-                f"{index + 1}. 【简答题】请简要说明以下知识点的含义或应用场景：{basis[:60]}\n"
-                f"参考答案：应围绕资料中的核心表述展开，可概括为“{basis[:100]}”。"
+                f"{index + 1}. {focus_prefix}【简答题】请简要说明以下知识点的含义或应用场景：{basis[:60]}\n"
+                f"参考答案：应围绕资料中的核心表述展开，可概括为“{basis[:100]}”。\n常见错因：解题步骤跳跃。"
             )
         blocks.append(block)
     return "\n\n".join(blocks)
