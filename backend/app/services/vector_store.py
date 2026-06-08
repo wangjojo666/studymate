@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.entities import Document, DocumentChunk
+from app.models.entities import ChunkKnowledgePoint, Document, DocumentChunk
 from app.services.chunker import TextChunk
 
 
@@ -53,15 +53,38 @@ def index_document_chunks(
     replace_page_numbers: list[int] | None = None,
 ) -> None:
     if replace_document:
-        db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
+        chunk_ids = [
+            row[0]
+            for row in db.query(DocumentChunk.id).filter(DocumentChunk.document_id == document.id).all()
+        ]
+        if chunk_ids:
+            db.query(ChunkKnowledgePoint).filter(ChunkKnowledgePoint.chunk_id.in_(chunk_ids)).delete(
+                synchronize_session=False
+            )
+        db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete(
+            synchronize_session=False
+        )
         first_index = 0
     else:
         page_numbers = sorted(set(replace_page_numbers or [chunk.page_number for chunk in chunks]))
         if page_numbers:
+            page_chunk_ids = [
+                row[0]
+                for row in db.query(DocumentChunk.id)
+                .filter(
+                    DocumentChunk.document_id == document.id,
+                    DocumentChunk.page_number.in_(page_numbers),
+                )
+                .all()
+            ]
+            if page_chunk_ids:
+                db.query(ChunkKnowledgePoint).filter(ChunkKnowledgePoint.chunk_id.in_(page_chunk_ids)).delete(
+                    synchronize_session=False
+                )
             db.query(DocumentChunk).filter(
                 DocumentChunk.document_id == document.id,
                 DocumentChunk.page_number.in_(page_numbers),
-            ).delete()
+            ).delete(synchronize_session=False)
         max_index = (
             db.query(func.max(DocumentChunk.chunk_index))
             .filter(DocumentChunk.document_id == document.id)

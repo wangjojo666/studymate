@@ -36,11 +36,13 @@ Base URL: `http://127.0.0.1:8000/api`
 `multipart/form-data` 上传字段：
 
 - `file`: PDF、PPTX、DOCX 或 TXT
+- 也支持 PNG、JPG、JPEG、WEBP 图片课件，适合公式图片、流程图、C++ 代码截图、物理电路图
 
 大小限制：
 
 - PDF / PPTX / DOCX：最大 100MB
 - TXT：最大 10MB
+- 图片课件：最大 100MB
 
 返回解析状态：
 
@@ -102,6 +104,23 @@ Base URL: `http://127.0.0.1:8000/api`
 
 删除单个资料，同时删除对应 `DocumentChunk`、`ChunkKnowledgePoint`、OCR 任务和本地上传文件。若知识点来源于该资料，会清空来源信息但保留学习画像中的知识点记录。
 
+`POST /courses/{course_id}/documents/{document_id}/vision`
+
+对图片课件重新执行视觉识别并入库。图片上传时会自动尝试识别；如果本地视觉模型未启动，资料会保留为 `needs_vision`，可稍后调用此接口重试。
+
+返回资料状态：
+
+```json
+{
+  "id": 3,
+  "file_type": "png",
+  "status": "indexed",
+  "page_count": 1,
+  "chunk_count": 2,
+  "error_message": "图片课件已完成多模态识别并加入知识库。"
+}
+```
+
 ## RAG Question Answering
 
 `POST /courses/{course_id}/ask`
@@ -156,6 +175,37 @@ Base URL: `http://127.0.0.1:8000/api`
 - `advanced`: 提高题
 - `exam`: 考试题
 - `mistake`: 易错题
+
+## C++ Code Tools
+
+`POST /courses/{course_id}/cpp/analyze`
+
+面向 C++ 课程的专项能力：解释代码、识别考点、生成同类练习题，并判断用户代码可能的错误。可以只传题目代码，也可以同时传用户代码用于对比诊断。
+
+```json
+{
+  "problem_text": "分析下面程序为什么能实现运行时多态。",
+  "code_text": "class Base { public: virtual void show(); };",
+  "user_code": "class Derived : public Base { public: void show(); };"
+}
+```
+
+返回：
+
+```json
+{
+  "summary": "用户代码主要涉及 继承与派生、虚函数与多态；规则检查发现 1 个需要关注的问题。",
+  "provider": "rule/offline",
+  "exam_points": [
+    {
+      "name": "虚函数与多态",
+      "exam_hint": "常考动态绑定、基类指针/引用调用派生类重写函数。"
+    }
+  ],
+  "similar_exercises": [],
+  "error_diagnosis": []
+}
+```
 
 ## Learning Diagnosis
 
@@ -212,6 +262,10 @@ Base URL: `http://127.0.0.1:8000/api`
 `GET /courses/{course_id}/learning/wrong-attempts`
 
 返回错题本列表，包含题目、用户答案、参考答案、错因、难度和关联知识点。
+
+`GET /courses/{course_id}/learning/report.pdf`
+
+导出 PDF 学习报告，包含课程名称、学习总览、薄弱知识点 Top 5、错题原因分布、最近练习记录、下周复习计划和 AI 建议。
 
 `POST /courses/{course_id}/learning/review-plan`
 

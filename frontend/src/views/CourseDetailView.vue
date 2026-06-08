@@ -18,7 +18,7 @@
         <el-upload
           :show-file-list="false"
           :http-request="handleUpload"
-          accept=".pdf,.pptx,.docx,.txt"
+          accept=".pdf,.pptx,.docx,.txt,.png,.jpg,.jpeg,.webp"
         >
           <el-button type="primary" :loading="uploading">
             <el-icon><Upload /></el-icon>
@@ -34,7 +34,7 @@
           <div class="panel-title">
             <div>
               <h2>课程资料</h2>
-              <span>扫描版 PDF 可先用快速索引模式入库</span>
+              <span>支持文档、扫描版 PDF 和公式/流程图/代码/电路图片入库</span>
             </div>
             <el-tag type="info">{{ course?.document_count || 0 }} 份</el-tag>
           </div>
@@ -68,6 +68,14 @@
                   @click="runOcr(document)"
                 >
                   OCR 入库
+                </el-button>
+                <el-button
+                  v-if="canRunVision(document)"
+                  size="small"
+                  :loading="visionRunningId === document.id || document.status === 'vision_processing'"
+                  @click="runVision(document)"
+                >
+                  识别入库
                 </el-button>
                 <el-button
                   v-if="activeOcrJob(document.id)"
@@ -200,6 +208,111 @@
         </div>
       </el-tab-pane>
 
+      <el-tab-pane label="C++ 代码" name="cpp">
+        <div class="panel cpp-panel">
+          <div class="panel-title">
+            <div>
+              <h2>C++ 课程专项能力</h2>
+              <span>解释代码、识别继承/虚函数/友元/运算符重载等考点，并诊断用户代码</span>
+            </div>
+            <div class="inline-actions">
+              <el-upload
+                :show-file-list="false"
+                :auto-upload="false"
+                accept=".cpp,.cc,.cxx,.h,.hpp,.txt"
+                :on-change="readCppFile"
+              >
+                <el-button>
+                  <el-icon><FolderOpened /></el-icon>
+                  读取代码文件
+                </el-button>
+              </el-upload>
+              <el-button type="primary" :loading="analyzingCpp" @click="analyzeCpp">
+                <el-icon><Cpu /></el-icon>
+                分析代码
+              </el-button>
+            </div>
+          </div>
+
+          <div class="cpp-form-grid">
+            <el-form label-position="top" @submit.prevent>
+              <el-form-item label="代码题/题干">
+                <el-input
+                  v-model="cppForm.problem_text"
+                  type="textarea"
+                  :rows="3"
+                  placeholder="例如：分析下面程序输出，说明虚函数如何实现运行时多态。"
+                />
+              </el-form-item>
+              <el-form-item label="题目代码或参考代码">
+                <el-input
+                  v-model="cppForm.code_text"
+                  type="textarea"
+                  :rows="12"
+                  placeholder="粘贴 C++ 题目代码、参考代码或截图识别后的代码文本"
+                />
+              </el-form-item>
+              <el-form-item label="用户代码">
+                <el-input
+                  v-model="cppForm.user_code"
+                  type="textarea"
+                  :rows="8"
+                  placeholder="可选：粘贴自己的答案，系统会判断可能的错误和遗漏考点"
+                />
+              </el-form-item>
+            </el-form>
+
+            <div class="cpp-result">
+              <div v-if="!cppAnalysis" class="empty-chat cpp-empty">
+                <el-icon><Cpu /></el-icon>
+                <span>上传或粘贴 C++ 代码后开始分析</span>
+              </div>
+              <template v-else>
+                <div class="cpp-summary">
+                  <strong>{{ cppAnalysis.summary }}</strong>
+                  <el-tag>{{ cppAnalysis.provider }}</el-tag>
+                </div>
+                <div class="cpp-section">
+                  <h3>考点识别</h3>
+                  <div class="cpp-point-list">
+                    <div v-for="point in cppAnalysis.exam_points" :key="point.name" class="cpp-point">
+                      <strong>{{ point.name }}</strong>
+                      <span>{{ point.exam_hint }}</span>
+                      <small>{{ point.evidence }}</small>
+                    </div>
+                  </div>
+                </div>
+                <div class="cpp-section">
+                  <h3>代码解释</h3>
+                  <pre>{{ cppAnalysis.explanation }}</pre>
+                </div>
+                <div class="cpp-section">
+                  <h3>错误诊断</h3>
+                  <div class="cpp-issue-list">
+                    <div v-for="issue in cppAnalysis.error_diagnosis" :key="`${issue.level}-${issue.title}`" class="cpp-issue">
+                      <el-tag :type="issueTagType(issue.level)">{{ issue.level }}</el-tag>
+                      <div>
+                        <strong>{{ issue.title }}</strong>
+                        <span>{{ issue.detail }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cpp-section">
+                  <h3>同类练习题</h3>
+                  <div class="cpp-exercise-list">
+                    <div v-for="exercise in cppAnalysis.similar_exercises" :key="exercise.title" class="cpp-exercise">
+                      <strong>{{ exercise.title }}</strong>
+                      <span>{{ exercise.prompt }}</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="学习诊断" name="diagnosis">
         <div class="diagnosis-preview-grid">
           <div class="panel">
@@ -237,11 +350,12 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 
 import {
+  analyzeCppCode,
   askCourse,
   cancelOcrJob,
   deleteDocument,
@@ -251,7 +365,8 @@ import {
   getOcrJob,
   getCourse,
   ocrDocument,
-  uploadDocument
+  uploadDocument,
+  visionDocument
 } from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
 
@@ -277,8 +392,16 @@ const practiceDifficulty = ref("basic");
 const practiceKnowledgePointId = ref(null);
 const lastProvider = ref("未调用");
 const ocrRunningId = ref(null);
+const visionRunningId = ref(null);
 const ocrJobs = ref({});
 const ocrPollTimer = ref(null);
+const analyzingCpp = ref(false);
+const cppAnalysis = ref(null);
+const cppForm = reactive({
+  problem_text: "",
+  code_text: "",
+  user_code: ""
+});
 
 const knowledgePointOptions = computed(() => learningProfile.value?.knowledge_points || []);
 const diagnosisWeakPoints = computed(() => (learningProfile.value?.weak_points || []).slice(0, 5));
@@ -399,6 +522,23 @@ async function stopOcr(document) {
     ElMessage.success(latest.error_message || "OCR 已停止");
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "停止 OCR 失败"));
+  }
+}
+
+async function runVision(document) {
+  visionRunningId.value = document.id;
+  try {
+    const updated = await visionDocument(props.id, document.id);
+    await loadCourse();
+    if (updated.status === "indexed") {
+      ElMessage.success(updated.error_message || "图片课件已识别入库");
+    } else {
+      ElMessage.warning(updated.error_message || "图片课件暂未识别成功");
+    }
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "图片识别失败，请确认后端和视觉模型已启动"));
+  } finally {
+    visionRunningId.value = null;
   }
 }
 
@@ -526,13 +666,45 @@ async function makePractice() {
   }
 }
 
+async function analyzeCpp() {
+  if (!cppForm.problem_text.trim() && !cppForm.code_text.trim() && !cppForm.user_code.trim()) {
+    ElMessage.warning("请先填写题干或 C++ 代码");
+    return;
+  }
+  analyzingCpp.value = true;
+  try {
+    cppAnalysis.value = await analyzeCppCode(props.id, cppForm);
+    lastProvider.value = cppAnalysis.value.provider || "rule/offline";
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "C++ 代码分析失败，请检查后端服务是否启动"));
+  } finally {
+    analyzingCpp.value = false;
+  }
+}
+
+function readCppFile(uploadFile) {
+  const rawFile = uploadFile.raw;
+  if (!rawFile) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    cppForm.code_text = String(reader.result || "");
+    ElMessage.success("代码文件已读取");
+  };
+  reader.onerror = () => {
+    ElMessage.error("代码文件读取失败");
+  };
+  reader.readAsText(rawFile, "utf-8");
+}
+
 function statusText(status) {
   return {
     indexed: "已入库",
     processing: "解析中",
     needs_ocr: "需 OCR",
+    needs_vision: "需识别",
     ocr_queued: "OCR 排队",
     ocr_processing: "OCR 中",
+    vision_processing: "识别中",
     failed: "失败",
     empty: "空文档"
   }[status] || status;
@@ -543,8 +715,10 @@ function statusType(status) {
     indexed: "success",
     processing: "warning",
     needs_ocr: "warning",
+    needs_vision: "warning",
     ocr_queued: "warning",
     ocr_processing: "warning",
+    vision_processing: "warning",
     failed: "danger",
     empty: "info"
   }[status] || "info";
@@ -554,6 +728,21 @@ function canRunOcr(document) {
   if (document.file_type !== "pdf") return false;
   if (document.status === "ocr_queued" || document.status === "ocr_processing") return false;
   return document.status === "needs_ocr" || document.error_message?.includes("OCR");
+}
+
+function canRunVision(document) {
+  if (!["png", "jpg", "jpeg", "webp"].includes(document.file_type)) return false;
+  return document.status === "needs_vision" || document.status === "empty";
+}
+
+function issueTagType(level) {
+  return {
+    ok: "success",
+    info: "info",
+    suggestion: "info",
+    warning: "warning",
+    error: "danger"
+  }[level] || "info";
 }
 
 function nextOcrInput(document) {
@@ -590,6 +779,6 @@ function sourceKey(source) {
 }
 
 function tabFromQuery(tab) {
-  return ["docs", "qa", "outline", "practice", "diagnosis"].includes(tab) ? tab : "qa";
+  return ["docs", "qa", "outline", "practice", "cpp", "diagnosis"].includes(tab) ? tab : "qa";
 }
 </script>

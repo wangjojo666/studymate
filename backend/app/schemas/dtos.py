@@ -45,3 +45,9 @@ class ReviewPlanRequest(BaseModel):
 
 class ReviewTaskUpdate(BaseModel):
     status: str = Field(..., pattern="^(pending|planned|done|skipped)$")
+
+
+class CppAnalysisRequest(BaseModel):
+    problem_text: str = Field("", max_length=4000)
+    code_text: str = Field("", max_length=12000)
+    user_code: str = Field("", max_length=12000)

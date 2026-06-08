@@ -793,6 +793,112 @@ pre {
   width: 132px;
 }
 
+.cpp-panel {
+  min-height: 680px;
+}
+
+.cpp-form-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(360px, 1.1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.cpp-result {
+  min-height: 590px;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.cpp-empty {
+  min-height: 540px;
+}
+
+.cpp-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.cpp-summary strong {
+  line-height: 1.55;
+}
+
+.cpp-section + .cpp-section {
+  margin-top: 16px;
+}
+
+.cpp-section h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.cpp-section pre {
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.cpp-point-list,
+.cpp-issue-list,
+.cpp-exercise-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cpp-point,
+.cpp-issue,
+.cpp-exercise {
+  padding: 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.cpp-point strong,
+.cpp-point span,
+.cpp-point small,
+.cpp-exercise strong,
+.cpp-exercise span {
+  display: block;
+}
+
+.cpp-point span,
+.cpp-exercise span,
+.cpp-issue span {
+  margin-top: 5px;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.cpp-point small {
+  margin-top: 5px;
+  color: var(--text-sub);
+}
+
+.cpp-issue {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.cpp-issue strong,
+.cpp-issue span {
+  display: block;
+}
+
 .diagnosis-preview-grid {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -1070,6 +1176,7 @@ pre {
   }
 
   .quick-ask-controls,
+  .cpp-form-grid,
   .attempt-form-row,
   .timeline-item {
     grid-template-columns: 1fr;
@@ -1110,6 +1217,7 @@ pre {
   }
 
   .practice-select,
+  .cpp-issue,
   .toolbar-actions .el-button,
   .toolbar-actions .el-upload,
   .hero-actions .el-button,
@@ -1125,6 +1233,10 @@ pre {
 
   .document-actions {
     align-items: stretch;
+  }
+
+  .cpp-issue {
+    grid-template-columns: 1fr;
   }
 
   .question,

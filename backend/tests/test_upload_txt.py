@@ -83,3 +83,82 @@ def test_reject_oversized_txt_upload(client):
     )
 
     assert upload_response.status_code == 413
+
+
+def test_upload_image_courseware_with_mock_vision(client):
+    course_response = client.post(
+        "/api/courses",
+        json={"name": "多模态课件验证", "description": "公式图片与代码截图"},
+    )
+    assert course_response.status_code == 200
+    course_id = course_response.json()["id"]
+
+    upload_response = client.post(
+        f"/api/courses/{course_id}/documents",
+        files={"file": ("virtual-function.png", b"fake-image-bytes", "image/png")},
+    )
+
+    assert upload_response.status_code == 200
+    uploaded = upload_response.json()
+    assert uploaded["status"] == "indexed"
+    assert uploaded["file_type"] == "png"
+    assert uploaded["chunk_count"] >= 1
+
+    ask_response = client.post(
+        f"/api/courses/{course_id}/ask",
+        json={"question": "这张图片课件识别了什么？", "top_k": 5},
+    )
+    assert ask_response.status_code == 200
+    assert ask_response.json()["sources"]
+
+
+def test_cpp_code_analysis_identifies_exam_points(client):
+    course_response = client.post(
+        "/api/courses",
+        json={"name": "C++ 专项验证", "description": "继承、虚函数、友元、运算符重载"},
+    )
+    assert course_response.status_code == 200
+    course_id = course_response.json()["id"]
+
+    code = """
+class Base {
+public:
+    virtual void show() {}
+};
+class Derived : public Base {
+public:
+    void show() override {}
+    friend ostream& operator<<(ostream& out, const Derived& d);
+};
+"""
+    response = client.post(
+        f"/api/courses/{course_id}/cpp/analyze",
+        json={
+            "problem_text": "分析下面代码的面向对象考点。",
+            "code_text": code,
+            "user_code": "class Derived : public Base { public: void show() {} };",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    point_names = {point["name"] for point in payload["exam_points"]}
+    assert "继承与派生" in point_names
+    assert "虚函数与多态" in point_names
+    assert payload["similar_exercises"]
+    assert payload["error_diagnosis"]
+
+
+def test_learning_report_pdf_export(client):
+    course_response = client.post(
+        "/api/courses",
+        json={"name": "报告导出验证", "description": "学习报告"},
+    )
+    assert course_response.status_code == 200
+    course_id = course_response.json()["id"]
+
+    response = client.get(f"/api/courses/{course_id}/learning/report.pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content.startswith(b"%PDF")

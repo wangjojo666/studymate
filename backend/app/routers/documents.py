@@ -16,6 +16,7 @@ from app.services.document_parser import parse_document
 from app.services.learning_service import sync_course_knowledge_points
 from app.services.ocr_service import ocr_pdf_with_qwen_vl
 from app.services.vector_store import index_document_chunks
+from app.services.vision_service import IMAGE_SUFFIXES, describe_courseware_image
 
 
 router = APIRouter(prefix="/courses/{course_id}/documents", tags=["documents"])
@@ -41,8 +42,8 @@ def upload_document(
         raise HTTPException(status_code=400, detail="文件名不能为空")
 
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in {".pdf", ".pptx", ".docx", ".txt"}:
-        raise HTTPException(status_code=400, detail="仅支持 PDF、PPTX、DOCX、TXT")
+    if suffix not in {".pdf", ".pptx", ".docx", ".txt", *IMAGE_SUFFIXES}:
+        raise HTTPException(status_code=400, detail="仅支持 PDF、PPTX、DOCX、TXT、PNG、JPG、WEBP")
     max_bytes = _max_upload_bytes(suffix)
 
     course_dir = settings.upload_dir / str(course_id)
@@ -64,16 +65,19 @@ def upload_document(
     db.refresh(document)
 
     try:
-        pages = parse_document(target)
-        chunks = split_pages_into_chunks(pages)
-        document.page_count = len(pages)
-        index_document_chunks(db, document, chunks)
-        _finalize_parse_status(document, suffix, bool(chunks), bool(pages))
-        sync_course_knowledge_points(db, course_id, document.id)
+        if suffix in IMAGE_SUFFIXES:
+            _index_image_document(db, course, document)
+        else:
+            pages = parse_document(target)
+            chunks = split_pages_into_chunks(pages)
+            document.page_count = len(pages)
+            index_document_chunks(db, document, chunks)
+            _finalize_parse_status(document, suffix, bool(chunks), bool(pages))
+            sync_course_knowledge_points(db, course_id, document.id)
         db.commit()
         db.refresh(document)
     except Exception as exc:  # noqa: BLE001 - return parser errors to the UI.
-        document.status = "failed"
+        document.status = "needs_vision" if suffix in IMAGE_SUFFIXES else "failed"
         document.error_message = str(exc)
         db.commit()
         db.refresh(document)
@@ -139,6 +143,32 @@ def delete_document(course_id: int, document_id: int, db: Session = Depends(get_
             return {"ok": True, "warning": "资料记录已删除，但本地文件删除失败，请手动检查 storage/uploads。"}
     _remove_empty_parent(file_path.parent)
     return {"ok": True}
+
+
+@router.post("/{document_id}/vision")
+def index_image_document(course_id: int, document_id: int, db: Session = Depends(get_db)) -> dict:
+    course = db.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    document = db.get(Document, document_id)
+    if document is None or document.course_id != course_id:
+        raise HTTPException(status_code=404, detail="资料不存在")
+    if f".{document.file_type.lower()}" not in IMAGE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="只有图片课件需要视觉识别入库")
+
+    document.status = "vision_processing"
+    document.error_message = "正在识别图片课件内容。"
+    db.commit()
+    try:
+        _index_image_document(db, course, document)
+        db.commit()
+        db.refresh(document)
+    except Exception as exc:  # noqa: BLE001 - surface vision failure to the UI.
+        document.status = "needs_vision"
+        document.error_message = str(exc)
+        db.commit()
+        db.refresh(document)
+    return _document_payload(document)
 
 
 @router.post("/{document_id}/ocr")
@@ -362,6 +392,22 @@ def _finalize_parse_status(document: Document, suffix: str, has_chunks: bool, ha
     else:
         document.status = "empty"
         document.error_message = "未从文件中解析到可检索文本。"
+
+
+def _index_image_document(db: Session, course: Course, document: Document) -> None:
+    document.status = "vision_processing"
+    text = describe_courseware_image(Path(document.file_path), course.name)
+    pages = [(1, text)]
+    chunks = split_pages_into_chunks(pages)
+    document.page_count = 1
+    index_document_chunks(db, document, chunks)
+    if chunks:
+        document.status = "indexed"
+        document.error_message = "图片课件已完成多模态识别并加入知识库。"
+    else:
+        document.status = "empty"
+        document.error_message = "图片课件识别完成，但没有生成可检索文本。"
+    sync_course_knowledge_points(db, course.id, document.id)
 
 
 def _safe_filename(filename: str) -> str:

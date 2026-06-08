@@ -19,6 +19,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "storage" / "uploads"))
     monkeypatch.setenv("TEXT_LLM_PROVIDER", "mock")
     monkeypatch.setenv("TEXT_LLM_FALLBACK_PROVIDER", "none")
+    monkeypatch.setenv("OCR_LLM_PROVIDER", "mock")
 
     for module_name in list(sys.modules):
         if module_name == "app" or module_name.startswith("app."):

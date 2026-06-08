@@ -10,10 +10,16 @@
         <h1>AI 学习画像中心</h1>
         <p>{{ course?.name || "课程" }} · 系统根据提问、练习和错题记录动态评估每个知识点的掌握程度。</p>
       </div>
-      <el-button @click="loadAll">
-        <el-icon><Refresh /></el-icon>
-        刷新诊断
-      </el-button>
+      <div class="toolbar-actions">
+        <el-button @click="downloadReport">
+          <el-icon><Document /></el-icon>
+          导出 PDF 报告
+        </el-button>
+        <el-button @click="loadAll">
+          <el-icon><Refresh /></el-icon>
+          刷新诊断
+        </el-button>
+      </div>
     </section>
 
     <section class="diagnosis-top-grid">
@@ -272,6 +278,7 @@ import {
   getKnowledgeGraph,
   getLearningProfile,
   getWrongAttempts,
+  learningReportUrl,
   submitPracticeAttempt,
   updateReviewTask
 } from "../api/client";
@@ -536,6 +543,10 @@ async function markTaskDone(task) {
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "任务更新失败，请检查后端服务是否启动"));
   }
+}
+
+function downloadReport() {
+  window.open(learningReportUrl(props.id), "_blank", "noopener");
 }
 
 function resetAttemptForm() {

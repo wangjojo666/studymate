@@ -39,6 +39,11 @@ export async function ocrDocument(courseId, documentId, payload) {
   return data;
 }
 
+export async function visionDocument(courseId, documentId) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/vision`);
+  return data;
+}
+
 export async function getOcrJob(courseId, documentId, jobId) {
   const { data } = await http.get(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}`);
   return data;
@@ -65,6 +70,11 @@ export async function generateOutline(courseId) {
 export async function generatePractice(courseId, payload) {
   const request = typeof payload === "number" ? { count: payload } : payload;
   const { data } = await http.post(`/courses/${courseId}/practice`, request);
+  return data;
+}
+
+export async function analyzeCppCode(courseId, payload) {
+  const { data } = await http.post(`/courses/${courseId}/cpp/analyze`, payload);
   return data;
 }
 
@@ -96,4 +106,8 @@ export async function generateReviewPlan(courseId, payload) {
 export async function updateReviewTask(courseId, taskId, status) {
   const { data } = await http.patch(`/courses/${courseId}/learning/tasks/${taskId}`, { status });
   return data;
+}
+
+export function learningReportUrl(courseId) {
+  return `/api/courses/${courseId}/learning/report.pdf`;
 }

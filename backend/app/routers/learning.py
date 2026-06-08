@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,6 +15,7 @@ from app.services.learning_service import (
     sync_course_knowledge_points,
     update_review_task_status,
 )
+from app.services.report_service import generate_learning_report_pdf
 
 
 router = APIRouter(prefix="/courses/{course_id}/learning", tags=["learning"])
@@ -48,6 +49,21 @@ def read_knowledge_graph(course_id: int, db: Session = Depends(get_db)) -> dict:
 def read_wrong_attempts(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
     _ensure_course(db, course_id)
     return get_wrong_attempts(db, course_id)
+
+
+@router.get("/report.pdf")
+def export_learning_report(course_id: int, db: Session = Depends(get_db)) -> Response:
+    _ensure_course(db, course_id)
+    try:
+        content = generate_learning_report_pdf(db, course_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    filename = f"studymate-course-{course_id}-learning-report.pdf"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/attempts")
