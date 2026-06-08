@@ -29,6 +29,11 @@ export async function uploadDocument(courseId, file) {
   return data;
 }
 
+export async function deleteDocument(courseId, documentId) {
+  const { data } = await http.delete(`/courses/${courseId}/documents/${documentId}`);
+  return data;
+}
+
 export async function ocrDocument(courseId, documentId, payload) {
   const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr`, payload);
   return data;

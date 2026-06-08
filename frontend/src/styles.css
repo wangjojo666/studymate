@@ -358,6 +358,68 @@ textarea {
   gap: 16px;
 }
 
+.learning-cue-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.cue-panel {
+  min-height: 142px;
+}
+
+.cue-panel span,
+.cue-panel strong,
+.cue-panel p {
+  display: block;
+}
+
+.cue-panel span {
+  color: var(--text-sub);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cue-panel strong {
+  min-height: 32px;
+  margin-top: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 22px;
+}
+
+.cue-panel p {
+  display: -webkit-box;
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.trend-panel {
+  overflow: hidden;
+}
+
+.trend-bars {
+  display: flex;
+  align-items: end;
+  gap: 7px;
+  height: 58px;
+  margin-top: 10px;
+}
+
+.trend-bars i {
+  flex: 1;
+  min-width: 8px;
+  border-radius: 5px 5px 2px 2px;
+  background: linear-gradient(180deg, var(--primary), var(--sky));
+}
+
 .dashboard-grid {
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
 }
@@ -994,8 +1056,9 @@ pre {
   .metrics-grid,
   .dashboard-metrics,
   .diagnosis-metrics,
+  .learning-cue-grid,
   .login-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .dashboard-hero,
@@ -1014,6 +1077,14 @@ pre {
 }
 
 @media (max-width: 640px) {
+  .metrics-grid,
+  .dashboard-metrics,
+  .diagnosis-metrics,
+  .learning-cue-grid,
+  .login-layout {
+    grid-template-columns: 1fr;
+  }
+
   .panel-title {
     align-items: stretch;
     flex-direction: column;

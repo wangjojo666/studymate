@@ -11,6 +11,9 @@ from app.services.llm_service import call_llm, offline_answer, offline_outline, 
 from app.services.vector_store import SearchResult, get_representative_chunks, search_course
 
 
+OFFLINE_PROVIDER = "mock/offline"
+
+
 def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) -> dict:
     sources = search_course(db, course_id, question, top_k)
     if not sources:
@@ -32,7 +35,7 @@ def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) 
         ]
         llm_response = call_llm(messages)
         answer = llm_response.content if llm_response else offline_answer(question, context)
-        provider = llm_response.used_provider if llm_response else "mock"
+        provider = llm_response.used_provider if llm_response else OFFLINE_PROVIDER
     else:
         answer = _empty_knowledge_base_message(db, course_id)
         provider = "system"
@@ -70,7 +73,7 @@ def generate_outline(db: Session, course_id: int) -> dict:
     ]
     llm_response = call_llm(messages)
     content = llm_response.content if llm_response else offline_outline(context)
-    return _save_material(db, course_id, "outline", content, sources, llm_response.used_provider if llm_response else "mock")
+    return _save_material(db, course_id, "outline", content, sources, llm_response.used_provider if llm_response else OFFLINE_PROVIDER)
 
 
 def generate_practice(
@@ -119,7 +122,7 @@ def generate_practice(
         f"practice:{difficulty}",
         content,
         sources,
-        llm_response.used_provider if llm_response else "mock",
+        llm_response.used_provider if llm_response else OFFLINE_PROVIDER,
     )
 
 
@@ -177,8 +180,8 @@ def _empty_knowledge_base_message(db: Session, course_id: int) -> str:
     if any(document.status == "needs_ocr" for document in documents):
         return (
             "你已经上传了资料，但这份 PDF 是扫描版/图片版，没有可提取的文字层，"
-            "所以还没有进入可检索知识库。请先对 PDF 做 OCR，生成带文本层的 PDF 后重新上传，"
-            "再进行问答、复习提纲和练习题生成。"
+            "所以还没有进入可检索知识库。请在资料卡片点击 OCR 入库；也可以先用其他 OCR 工具"
+            "生成带文本层的 PDF 后重新上传，再进行问答、复习提纲和练习题生成。"
         )
     if any(document.status == "failed" for document in documents):
         return "资料上传后解析失败，请查看资料卡片上的错误提示，处理后重新上传。"

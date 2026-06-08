@@ -49,22 +49,18 @@ class Settings:
 
     # Backward-compatible generic LLM settings. New code should prefer
     # TEXT_LLM_* for RAG generation and OCR_LLM_* for vision OCR.
-    llm_provider: str = os.getenv("LLM_PROVIDER", "ollama").lower()
-    llm_model: str = os.getenv("LLM_MODEL", "qwen3-vl:30b")
-    llm_base_url: str = os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434")
+    llm_provider: str = os.getenv("LLM_PROVIDER", "mock").lower()
+    llm_model: str = os.getenv("LLM_MODEL", "")
+    llm_base_url: str = os.getenv("LLM_BASE_URL", "")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
 
-    text_llm_provider: str = os.getenv("TEXT_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "ollama")).lower()
-    text_llm_model: str = os.getenv("TEXT_LLM_MODEL", os.getenv("LLM_MODEL", "qwen3-vl:30b"))
-    text_llm_base_url: str = os.getenv(
-        "TEXT_LLM_BASE_URL", os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434")
-    )
+    text_llm_provider: str = os.getenv("TEXT_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "mock")).lower()
+    text_llm_model: str = os.getenv("TEXT_LLM_MODEL", os.getenv("LLM_MODEL", ""))
+    text_llm_base_url: str = os.getenv("TEXT_LLM_BASE_URL", os.getenv("LLM_BASE_URL", ""))
     text_llm_api_key: str = os.getenv("TEXT_LLM_API_KEY", os.getenv("LLM_API_KEY", ""))
-    text_llm_fallback_provider: str = os.getenv("TEXT_LLM_FALLBACK_PROVIDER", "ollama").lower()
-    text_llm_fallback_model: str = os.getenv("TEXT_LLM_FALLBACK_MODEL", "qwen3-vl:30b")
-    text_llm_fallback_base_url: str = os.getenv(
-        "TEXT_LLM_FALLBACK_BASE_URL", "http://127.0.0.1:11434"
-    )
+    text_llm_fallback_provider: str = os.getenv("TEXT_LLM_FALLBACK_PROVIDER", "none").lower()
+    text_llm_fallback_model: str = os.getenv("TEXT_LLM_FALLBACK_MODEL", "")
+    text_llm_fallback_base_url: str = os.getenv("TEXT_LLM_FALLBACK_BASE_URL", "")
     text_llm_fallback_api_key: str = os.getenv("TEXT_LLM_FALLBACK_API_KEY", "")
 
     ocr_llm_provider: str = os.getenv("OCR_LLM_PROVIDER", "ollama").lower()
@@ -73,7 +69,9 @@ class Settings:
         "OCR_LLM_BASE_URL", os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434")
     )
     ocr_default_max_pages: int = int(os.getenv("OCR_DEFAULT_MAX_PAGES", "10"))
-    ocr_max_pages_per_request: int = int(os.getenv("OCR_MAX_PAGES_PER_REQUEST", "50"))
+    ocr_max_pages_per_request: int = int(os.getenv("OCR_MAX_PAGES_PER_REQUEST", "20"))
+    document_upload_max_bytes: int = int(os.getenv("DOCUMENT_UPLOAD_MAX_BYTES", str(100 * 1024 * 1024)))
+    txt_upload_max_bytes: int = int(os.getenv("TXT_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
 
 
 settings = Settings()

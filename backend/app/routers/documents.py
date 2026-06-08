@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -10,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal, get_db
-from app.models.entities import Course, Document, OcrJob
+from app.models.entities import ChunkKnowledgePoint, Course, Document, DocumentChunk, KnowledgePoint, OcrJob
 from app.schemas import OcrRequest
 from app.services.chunker import split_pages_into_chunks
 from app.services.document_parser import parse_document
@@ -25,6 +24,8 @@ OCR_MODE_LABELS = {
     "fast": "快速索引",
     "full": "精确 OCR",
 }
+
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 @router.post("")
@@ -42,13 +43,13 @@ def upload_document(
     suffix = Path(file.filename).suffix.lower()
     if suffix not in {".pdf", ".pptx", ".docx", ".txt"}:
         raise HTTPException(status_code=400, detail="仅支持 PDF、PPTX、DOCX、TXT")
+    max_bytes = _max_upload_bytes(suffix)
 
     course_dir = settings.upload_dir / str(course_id)
     course_dir.mkdir(parents=True, exist_ok=True)
     stored_filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{_safe_filename(file.filename)}"
     target = course_dir / stored_filename
-    with target.open("wb") as out_file:
-        shutil.copyfileobj(file.file, out_file)
+    _save_upload_with_limit(file, target, max_bytes)
 
     document = Document(
         course_id=course_id,
@@ -94,6 +95,52 @@ def list_documents(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
     return [_document_payload(document) for document in documents]
 
 
+@router.delete("/{document_id}")
+def delete_document(course_id: int, document_id: int, db: Session = Depends(get_db)) -> dict:
+    course = db.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    document = db.get(Document, document_id)
+    if document is None or document.course_id != course_id:
+        raise HTTPException(status_code=404, detail="资料不存在")
+
+    file_path = Path(document.file_path)
+    chunk_ids = [
+        row[0]
+        for row in db.query(DocumentChunk.id).filter(DocumentChunk.document_id == document_id).all()
+    ]
+    if chunk_ids:
+        db.query(ChunkKnowledgePoint).filter(ChunkKnowledgePoint.chunk_id.in_(chunk_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(OcrJob).filter(OcrJob.document_id == document_id).delete(synchronize_session=False)
+    db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete(
+        synchronize_session=False
+    )
+    (
+        db.query(KnowledgePoint)
+        .filter(KnowledgePoint.source_document_id == document_id)
+        .update(
+            {
+                KnowledgePoint.source_document_id: None,
+                KnowledgePoint.source_page: 0,
+                KnowledgePoint.evidence: "来源资料已删除，请重新同步或上传资料。",
+            },
+            synchronize_session=False,
+        )
+    )
+    db.delete(document)
+    db.commit()
+
+    if file_path.exists():
+        try:
+            file_path.unlink()
+        except OSError:
+            return {"ok": True, "warning": "资料记录已删除，但本地文件删除失败，请手动检查 storage/uploads。"}
+    _remove_empty_parent(file_path.parent)
+    return {"ok": True}
+
+
 @router.post("/{document_id}/ocr")
 def ocr_document(
     course_id: int,
@@ -110,6 +157,11 @@ def ocr_document(
         raise HTTPException(status_code=404, detail="资料不存在")
     if document.file_type != "pdf":
         raise HTTPException(status_code=400, detail="只有扫描版 PDF 需要 OCR")
+    if payload.max_pages > settings.ocr_max_pages_per_request:
+        raise HTTPException(
+            status_code=400,
+            detail=f"OCR 单次最多处理 {settings.ocr_max_pages_per_request} 页，请减少页数后重试",
+        )
 
     running_job = (
         db.query(OcrJob)
@@ -315,6 +367,45 @@ def _finalize_parse_status(document: Document, suffix: str, has_chunks: bool, ha
 def _safe_filename(filename: str) -> str:
     name = re.sub("[^\\w.\\-\u4e00-\u9fff]+", "_", filename, flags=re.UNICODE)
     return name[:160] or "upload"
+
+
+def _max_upload_bytes(suffix: str) -> int:
+    if suffix == ".txt":
+        return settings.txt_upload_max_bytes
+    return settings.document_upload_max_bytes
+
+
+def _save_upload_with_limit(file: UploadFile, target: Path, max_bytes: int) -> None:
+    total = 0
+    try:
+        with target.open("wb") as out_file:
+            while True:
+                chunk = file.file.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"文件过大。当前类型最大允许 {_format_bytes(max_bytes)}。",
+                    )
+                out_file.write(chunk)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+
+
+def _format_bytes(value: int) -> str:
+    if value >= 1024 * 1024:
+        return f"{value // (1024 * 1024)}MB"
+    return f"{value // 1024}KB"
+
+
+def _remove_empty_parent(path: Path) -> None:
+    try:
+        path.rmdir()
+    except OSError:
+        return
 
 
 def _document_payload(document: Document) -> dict:

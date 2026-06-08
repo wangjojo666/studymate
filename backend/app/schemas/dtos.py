@@ -23,7 +23,7 @@ class PracticeRequest(BaseModel):
 
 class OcrRequest(BaseModel):
     start_page: int = Field(1, ge=1)
-    max_pages: int = Field(10, ge=1, le=50)
+    max_pages: int = Field(10, ge=1, le=20)
     mode: str = Field("fast", pattern="^(fast|full)$")
 
 

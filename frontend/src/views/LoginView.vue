@@ -2,13 +2,13 @@
   <section class="login-layout">
     <div class="login-panel">
       <div class="section-heading">
-        <span>Demo Access</span>
+        <span>Single-user Demo</span>
         <h1>StudyMate</h1>
-        <p>第一版采用演示登录，后续可接入真实账号与班级权限。</p>
+        <p>当前版本为单用户本地演示版，学习画像、错题和复习任务默认绑定 demo-user。</p>
       </div>
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="账号">
-          <el-input v-model="username" size="large" placeholder="student" />
+          <el-input v-model="username" size="large" placeholder="demo-user" />
         </el-form-item>
         <el-form-item label="密码">
           <el-input v-model="password" size="large" placeholder="任意输入" show-password />
@@ -35,7 +35,7 @@ import { ref } from "vue";
 import { useRouter } from "vue-router";
 
 const router = useRouter();
-const username = ref("student");
+const username = ref("demo-user");
 const password = ref("");
 
 function enter() {

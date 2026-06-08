@@ -78,6 +78,15 @@
                 >
                   停止
                 </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :disabled="Boolean(activeOcrJob(document.id))"
+                  @click="removeDocument(document)"
+                >
+                  删除
+                </el-button>
               </div>
             </div>
           </div>
@@ -235,6 +244,7 @@ import { useRoute, useRouter } from "vue-router";
 import {
   askCourse,
   cancelOcrJob,
+  deleteDocument,
   generateOutline,
   generatePractice,
   getLearningProfile,
@@ -243,6 +253,7 @@ import {
   ocrDocument,
   uploadDocument
 } from "../api/client";
+import { getApiErrorMessage } from "../api/errors";
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -264,7 +275,7 @@ const practiceSources = ref([]);
 const practiceCount = ref(10);
 const practiceDifficulty = ref("basic");
 const practiceKnowledgePointId = ref(null);
-const lastProvider = ref("deepseek/deepseek-v4-flash");
+const lastProvider = ref("未调用");
 const ocrRunningId = ref(null);
 const ocrJobs = ref({});
 const ocrPollTimer = ref(null);
@@ -298,6 +309,17 @@ async function loadCourse() {
     ]);
     course.value = courseData;
     learningProfile.value = profileData;
+    messages.value = (courseData.recent_messages || [])
+      .slice()
+      .reverse()
+      .map((message) => ({
+        id: message.id,
+        question: message.question,
+        answer: message.answer,
+        sources: message.sources || []
+      }));
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "课程加载失败，请检查后端服务是否启动"));
   } finally {
     loading.value = false;
   }
@@ -318,7 +340,7 @@ async function handleUpload(options) {
       ElMessage.success("资料解析完成");
     }
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "上传失败，请检查后端服务和文件格式");
+    ElMessage.error(getApiErrorMessage(error, "上传失败，请检查后端服务和文件格式"));
   } finally {
     uploading.value = false;
   }
@@ -359,7 +381,7 @@ async function runOcr(document) {
     await loadCourse();
     ElMessage.info("OCR 后台任务已启动，可继续使用页面");
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "OCR 启动失败，请确认后端服务正常");
+    ElMessage.error(getApiErrorMessage(error, "OCR 启动失败，请确认后端服务正常"));
     await loadCourse();
     ocrRunningId.value = null;
   }
@@ -376,7 +398,31 @@ async function stopOcr(document) {
     await loadCourse();
     ElMessage.success(latest.error_message || "OCR 已停止");
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "停止 OCR 失败");
+    ElMessage.error(getApiErrorMessage(error, "停止 OCR 失败"));
+  }
+}
+
+async function removeDocument(document) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除资料“${document.original_filename}”吗？相关知识片段和 OCR 任务也会删除。`,
+      "删除资料",
+      {
+        confirmButtonText: "删除",
+        cancelButtonText: "取消",
+        type: "warning"
+      }
+    );
+  } catch {
+    return;
+  }
+
+  try {
+    await deleteDocument(props.id, document.id);
+    ElMessage.success("资料已删除");
+    await loadCourse();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "资料删除失败，请检查后端服务是否启动"));
   }
 }
 
@@ -414,9 +460,10 @@ async function pollOcrJob(job) {
         ElMessage.error(latest.error_message || "OCR 失败，请确认 Ollama 和视觉模型已启动");
       }
     }
-  } catch {
+  } catch (error) {
     stopOcrPolling();
     ocrRunningId.value = null;
+    ElMessage.error(getApiErrorMessage(error, "OCR 状态刷新失败，请检查后端服务是否启动"));
   }
 }
 
@@ -430,7 +477,7 @@ async function ask() {
   question.value = "";
   try {
     const result = await askCourse(props.id, currentQuestion);
-    lastProvider.value = result.provider;
+    lastProvider.value = result.provider || "unknown";
     messages.value.push({
       id: Date.now(),
       question: currentQuestion,
@@ -438,6 +485,9 @@ async function ask() {
       sources: result.sources
     });
     await loadCourse();
+  } catch (error) {
+    question.value = currentQuestion;
+    ElMessage.error(getApiErrorMessage(error, "请求失败，请检查后端服务是否启动"));
   } finally {
     asking.value = false;
   }
@@ -447,9 +497,11 @@ async function makeOutline() {
   generatingOutline.value = true;
   try {
     const result = await generateOutline(props.id);
-    lastProvider.value = result.provider;
+    lastProvider.value = result.provider || "unknown";
     outline.value = result.content;
     outlineSources.value = result.sources;
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "复习提纲生成失败，请检查后端服务是否启动"));
   } finally {
     generatingOutline.value = false;
   }
@@ -463,10 +515,12 @@ async function makePractice() {
       difficulty: practiceDifficulty.value,
       knowledge_point_id: practiceKnowledgePointId.value || null
     });
-    lastProvider.value = result.provider;
+    lastProvider.value = result.provider || "unknown";
     practice.value = result.content;
     practiceSources.value = result.sources;
     await loadCourse();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "练习题生成失败，请检查后端服务是否启动"));
   } finally {
     generatingPractice.value = false;
   }

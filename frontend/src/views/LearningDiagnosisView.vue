@@ -275,6 +275,8 @@ import {
   submitPracticeAttempt,
   updateReviewTask
 } from "../api/client";
+import { getApiErrorMessage } from "../api/errors";
+import { chartColors, chartPalette, masteryColor } from "../theme/chartTheme";
 
 use([
   BarChart,
@@ -336,8 +338,8 @@ const gaugeOption = computed(() => ({
       min: 0,
       max: 100,
       radius: "92%",
-      progress: { show: true, width: 16, itemStyle: { color: "#4f46e5" } },
-      axisLine: { lineStyle: { width: 16, color: [[1, "#e2e8f0"]] } },
+      progress: { show: true, width: 16, itemStyle: { color: chartColors.primary } },
+      axisLine: { lineStyle: { width: 16, color: [[1, chartColors.border]] } },
       axisTick: { show: false },
       splitLine: { show: false },
       axisLabel: { show: false },
@@ -346,7 +348,7 @@ const gaugeOption = computed(() => ({
       detail: {
         valueAnimation: true,
         formatter: "{value}%",
-        color: "#0f172a",
+        color: chartColors.text,
         fontSize: 34,
         fontWeight: 800,
         offsetCenter: [0, "4%"]
@@ -363,14 +365,14 @@ const radarOption = computed(() => {
     radar: {
       radius: "68%",
       indicator: points.map((point) => ({ name: point.name, max: 100 })),
-      splitArea: { areaStyle: { color: ["#f8fafc", "#eef2ff"] } },
-      axisName: { color: "#334155" }
+      splitArea: { areaStyle: { color: [chartColors.surface, chartColors.primarySoft] } },
+      axisName: { color: chartColors.textSub }
     },
     series: [
       {
         type: "radar",
-        areaStyle: { color: "rgba(79, 70, 229, 0.2)" },
-        lineStyle: { color: "#4f46e5", width: 2 },
+        areaStyle: { color: chartColors.primaryAlpha },
+        lineStyle: { color: chartColors.primary, width: 2 },
         data: [{ value: points.map((point) => point.mastery_score), name: "掌握度" }]
       }
     ]
@@ -382,18 +384,18 @@ const barOption = computed(() => {
   return {
     tooltip: {},
     grid: { left: 8, right: 18, top: 16, bottom: 8, containLabel: true },
-    xAxis: { type: "value", max: 100, axisLabel: { color: "#64748b" }, splitLine: { lineStyle: { color: "#e2e8f0" } } },
+    xAxis: { type: "value", max: 100, axisLabel: { color: chartColors.muted }, splitLine: { lineStyle: { color: chartColors.border } } },
     yAxis: {
       type: "category",
       data: points.map((point) => point.name),
-      axisLabel: { color: "#334155" }
+      axisLabel: { color: chartColors.textSub }
     },
     series: [
       {
         type: "bar",
         data: points.map((point) => ({
           value: point.mastery_score,
-          itemStyle: { color: point.mastery_score < 60 ? "#ef4444" : point.mastery_score < 80 ? "#f59e0b" : "#16a34a" }
+          itemStyle: { color: point.mastery_score < 60 ? chartColors.danger : point.mastery_score < 80 ? chartColors.warning : chartColors.success }
         })),
         barWidth: 12,
         borderRadius: 6
@@ -411,14 +413,14 @@ const wrongPieOption = computed(() => {
   const data = Object.entries(counts).map(([name, value]) => ({ name, value }));
   return {
     tooltip: { trigger: "item" },
-    legend: { bottom: 0, textStyle: { color: "#64748b" } },
+    legend: { bottom: 0, textStyle: { color: chartColors.muted } },
     series: [
       {
         type: "pie",
         radius: ["48%", "72%"],
         center: ["50%", "43%"],
         data: data.length ? data : [{ name: "暂无错题", value: 1 }],
-        color: ["#4f46e5", "#0ea5e9", "#f59e0b", "#ef4444", "#16a34a"]
+        color: chartPalette
       }
     ]
   };
@@ -431,9 +433,9 @@ const graphOption = computed(() => {
     value: node.mastery_score,
     symbolSize: Math.max(34, Math.min(68, 86 - node.mastery_score / 1.5)),
     itemStyle: {
-      color: node.state === "weak" ? "#ef4444" : node.state === "solid" ? "#16a34a" : "#4f46e5"
+      color: masteryColor(node.mastery_score, node.state)
     },
-    label: { show: true, color: "#0f172a", fontWeight: 700 }
+    label: { show: true, color: chartColors.text, fontWeight: 700 }
   }));
   const nodeIds = new Set(nodes.map((node) => node.id));
   const links = (graph.value?.edges || [])
@@ -450,7 +452,7 @@ const graphOption = computed(() => {
         data: nodes,
         links,
         force: { repulsion: 180, edgeLength: 85 },
-        lineStyle: { color: "#94a3b8", width: 1.4, opacity: 0.7 },
+        lineStyle: { color: chartColors.muted, width: 1.4, opacity: 0.7 },
         labelLayout: { hideOverlap: true },
         emphasis: { focus: "adjacency" }
       }
@@ -473,6 +475,8 @@ async function loadAll() {
     profile.value = profileData;
     graph.value = graphData;
     wrongAttempts.value = wrongData;
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "学习诊断加载失败，请检查后端服务是否启动"));
   } finally {
     loading.value = false;
   }
@@ -498,7 +502,7 @@ async function saveAttempt() {
     resetAttemptForm();
     await loadAll();
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "记录失败");
+    ElMessage.error(getApiErrorMessage(error, "记录失败，请检查后端服务是否启动"));
   } finally {
     submittingAttempt.value = false;
   }
@@ -515,19 +519,23 @@ async function makeReviewPlan() {
     await loadAll();
     ElMessage.success("复习计划已生成");
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "复习计划生成失败");
+    ElMessage.error(getApiErrorMessage(error, "复习计划生成失败，请检查后端服务是否启动"));
   } finally {
     generatingPlan.value = false;
   }
 }
 
 async function markTaskDone(task) {
-  const updated = await updateReviewTask(props.id, task.id, "done");
-  if (plan.value?.tasks?.length) {
-    plan.value.tasks = plan.value.tasks.map((item) => (item.id === updated.id ? updated : item));
+  try {
+    const updated = await updateReviewTask(props.id, task.id, "done");
+    if (plan.value?.tasks?.length) {
+      plan.value.tasks = plan.value.tasks.map((item) => (item.id === updated.id ? updated : item));
+    }
+    ElMessage.success("已更新掌握度");
+    await loadAll();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "任务更新失败，请检查后端服务是否启动"));
   }
-  ElMessage.success("已更新掌握度");
-  await loadAll();
 }
 
 function resetAttemptForm() {

@@ -37,6 +37,11 @@ Base URL: `http://127.0.0.1:8000/api`
 
 - `file`: PDF、PPTX、DOCX 或 TXT
 
+大小限制：
+
+- PDF / PPTX / DOCX：最大 100MB
+- TXT：最大 10MB
+
 返回解析状态：
 
 ```json
@@ -53,6 +58,7 @@ Base URL: `http://127.0.0.1:8000/api`
 `POST /courses/{course_id}/documents/{document_id}/ocr`
 
 创建后台 OCR 任务。后端会调用本地 `qwen3-vl:30b` 做 OCR，并把识别结果切分入库。
+单次 OCR 最多 20 页，建议优先使用 `fast` 模式处理 5-10 页。
 
 ```json
 {
@@ -92,6 +98,10 @@ Base URL: `http://127.0.0.1:8000/api`
 
 停止正在运行的 OCR 任务；已入库的页面片段会保留。
 
+`DELETE /courses/{course_id}/documents/{document_id}`
+
+删除单个资料，同时删除对应 `DocumentChunk`、`ChunkKnowledgePoint`、OCR 任务和本地上传文件。若知识点来源于该资料，会清空来源信息但保留学习画像中的知识点记录。
+
 ## RAG Question Answering
 
 `POST /courses/{course_id}/ask`
@@ -108,7 +118,7 @@ Base URL: `http://127.0.0.1:8000/api`
 ```json
 {
   "answer": "根据课程资料，第三章重点包括……",
-  "provider": "deepseek/deepseek-v4-flash",
+  "provider": "mock/offline",
   "sources": [
     {
       "document_name": "C++ 第三章.pdf",
@@ -119,6 +129,8 @@ Base URL: `http://127.0.0.1:8000/api`
   ]
 }
 ```
+
+`provider` 会返回后端实际使用的链路，例如 `mock/offline`、`deepseek/deepseek-v4-flash` 或 `ollama/qwen3-vl:30b`。
 
 ## Review Outline
 

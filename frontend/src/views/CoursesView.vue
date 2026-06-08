@@ -74,6 +74,7 @@ import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 
 import { createCourse, getCourses } from "../api/client";
+import { getApiErrorMessage } from "../api/errors";
 
 const router = useRouter();
 const route = useRoute();
@@ -105,6 +106,8 @@ async function loadCourses() {
   loading.value = true;
   try {
     courses.value = await getCourses();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "课程列表加载失败，请检查后端服务是否启动"));
   } finally {
     loading.value = false;
   }
@@ -124,7 +127,7 @@ async function saveCourse() {
     courses.value.unshift(course);
     ElMessage.success("课程已创建");
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "创建失败");
+    ElMessage.error(getApiErrorMessage(error, "创建失败，请检查后端服务是否启动"));
   } finally {
     saving.value = false;
   }

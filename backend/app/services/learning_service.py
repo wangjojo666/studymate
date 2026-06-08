@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
@@ -21,6 +22,7 @@ from app.models.entities import (
     UserKnowledgeStatus,
 )
 from app.schemas import AttemptCreate, ReviewPlanRequest
+from app.services.llm_service import call_llm
 
 
 DEMO_USER_ID = "demo-user"
@@ -138,6 +140,8 @@ CONCEPT_MARKERS = (
     "守恒",
 )
 
+LLM_EXTRACTION_CHUNK_LIMIT = 12
+
 
 def sync_course_knowledge_points(db: Session, course_id: int, document_id: int | None = None) -> None:
     course = db.get(Course, course_id)
@@ -150,16 +154,25 @@ def sync_course_knowledge_points(db: Session, course_id: int, document_id: int |
     chunks = query.order_by(DocumentChunk.document_id.asc(), DocumentChunk.chunk_index.asc()).limit(160).all()
 
     if chunks:
+        llm_candidates = _llm_candidate_points_for_chunks(course.name, chunks) if document_id is not None else {}
         for chunk in chunks:
-            for name in _candidate_names_for_chunk(course.name, chunk.content)[:4]:
+            rule_candidates = [
+                {
+                    "name": name,
+                    "description": f"从课程资料中识别出的知识点：{name}",
+                    "evidence": chunk.content[:240],
+                }
+                for name in _candidate_names_for_chunk(course.name, chunk.content)
+            ]
+            for item in _unique_candidate_items([*llm_candidates.get(chunk.id, []), *rule_candidates])[:4]:
                 point = _get_or_create_knowledge_point(
                     db,
                     course_id=course_id,
-                    name=name,
-                    description=f"从课程资料中识别出的知识点：{name}",
+                    name=item["name"],
+                    description=item["description"],
                     source_document_id=chunk.document_id,
                     source_page=chunk.page_number,
-                    evidence=chunk.content[:240],
+                    evidence=item["evidence"] or chunk.content[:240],
                 )
                 _link_chunk_to_point(db, course_id, chunk.id, point.id)
                 _ensure_status(db, course_id, point.id)
@@ -197,6 +210,7 @@ def get_learning_profile(db: Session, course_id: int) -> dict:
         limit=8,
     )
     recent_attempts = _attempt_payloads(db, course_id, only_wrong=False, limit=6)
+    recent_questions = _recent_question_payloads(db, course_id, limit=3)
 
     overall_mastery = (
         round(sum(point["mastery_score"] for point in points) / len(points), 1) if points else 0.0
@@ -218,6 +232,7 @@ def get_learning_profile(db: Session, course_id: int) -> dict:
         "knowledge_points": points,
         "weak_points": weak_points,
         "recommendations": _recommendations_from_weak_points(weak_points),
+        "recent_questions": recent_questions,
         "recent_attempts": recent_attempts,
         "pending_tasks": pending_tasks,
     }
@@ -415,6 +430,115 @@ def _candidate_names_for_chunk(course_name: str, content: str) -> list[str]:
             reverse=True,
         )
     ][:8]
+
+
+def _llm_candidate_points_for_chunks(course_name: str, chunks: list[DocumentChunk]) -> dict[int, list[dict]]:
+    sampled_chunks = chunks[:LLM_EXTRACTION_CHUNK_LIMIT]
+    if not sampled_chunks:
+        return {}
+
+    context = "\n\n".join(
+        f"[chunk_id:{chunk.id}] P{chunk.page_number}\n{chunk.content[:900]}"
+        for chunk in sampled_chunks
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是课程知识点抽取助手。只根据给定课程片段抽取知识点，"
+                "返回严格 JSON 数组，不要 Markdown，不要额外解释。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"课程名称：{course_name}\n\n课程片段：\n{context}\n\n"
+                "请返回数组，每项包含 chunk_id、name、description、evidence、difficulty。"
+                "difficulty 只能是 easy、medium、hard；name 控制在 2 到 18 个中文字符或英文术语内。"
+            ),
+        },
+    ]
+    response = call_llm(messages, temperature=0)
+    if response is None:
+        return {}
+
+    parsed = _parse_llm_points(response.content)
+    valid_chunk_ids = {chunk.id for chunk in sampled_chunks}
+    fallback_chunk_id = sampled_chunks[0].id
+    result: dict[int, list[dict]] = defaultdict(list)
+    for item in parsed[:36]:
+        if not isinstance(item, dict):
+            continue
+        name = _clean_knowledge_name(str(item.get("name") or ""))
+        if not name:
+            continue
+        chunk_id = _coerce_int(item.get("chunk_id"))
+        if chunk_id not in valid_chunk_ids:
+            chunk_id = fallback_chunk_id
+        description = str(item.get("description") or f"由大模型从课程资料中抽取出的知识点：{name}").strip()
+        evidence = str(item.get("evidence") or "").strip()[:240]
+        difficulty = str(item.get("difficulty") or "").strip().lower()
+        if difficulty in {"easy", "medium", "hard"} and "难度" not in description:
+            description = f"{description}（难度：{difficulty}）"
+        result[chunk_id].append(
+            {
+                "name": name,
+                "description": description[:500],
+                "evidence": evidence,
+            }
+        )
+    return result
+
+
+def _parse_llm_points(content: str) -> list[dict]:
+    text = content.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.S)
+    if fenced:
+        text = fenced.group(1).strip()
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return []
+    try:
+        payload = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _unique_candidate_items(items: list[dict]) -> list[dict]:
+    unique: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        name = _clean_knowledge_name(str(item.get("name") or ""))
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(
+            {
+                "name": name,
+                "description": str(item.get("description") or f"从课程资料中识别出的知识点：{name}").strip(),
+                "evidence": str(item.get("evidence") or "").strip()[:240],
+            }
+        )
+    return unique
+
+
+def _clean_knowledge_name(name: str) -> str:
+    cleaned = re.sub(r"\s+", " ", name).strip(" 。，,；;：:")
+    if not (2 <= len(cleaned) <= 120):
+        return ""
+    return cleaned[:120]
+
+
+def _coerce_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _get_or_create_knowledge_point(
@@ -740,6 +864,26 @@ def _attempt_payloads(
         query = query.filter(QuestionAttempt.is_correct.is_(False))
     attempts = query.order_by(QuestionAttempt.created_at.desc()).limit(limit).all()
     return [_attempt_payload(db, attempt) for attempt in attempts]
+
+
+def _recent_question_payloads(db: Session, course_id: int, limit: int) -> list[dict]:
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.course_id == course_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": message.id,
+            "course_id": message.course_id,
+            "question": message.question,
+            "answer": message.answer[:180],
+            "created_at": message.created_at,
+        }
+        for message in messages
+    ]
 
 
 def _attempt_payload(db: Session, attempt: QuestionAttempt) -> dict:

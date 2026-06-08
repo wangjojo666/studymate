@@ -46,6 +46,41 @@
       </div>
     </section>
 
+    <section class="learning-cue-grid">
+      <div class="panel cue-panel">
+        <span>今日待复习</span>
+        <strong>{{ todayTasks.length }}</strong>
+        <p>{{ todayTasks[0]?.title || todayTasks[0]?.action || "暂无待办，先生成复习计划" }}</p>
+      </div>
+      <div class="panel cue-panel">
+        <span>最近一次提问</span>
+        <strong>{{ recentQuestion ? formatDate(recentQuestion.created_at) : "未提问" }}</strong>
+        <p>{{ recentQuestion?.question || "进入课程后向资料提一个问题" }}</p>
+      </div>
+      <div class="panel cue-panel">
+        <span>最近错题</span>
+        <strong>{{ recentWrongAttempt?.knowledge_point_name || "暂无错题" }}</strong>
+        <p>{{ recentWrongAttempt?.error_reason || "记录练习结果后会自动归因" }}</p>
+      </div>
+      <div class="panel cue-panel">
+        <span>考试倒计时</span>
+        <strong>{{ examCountdownText }}</strong>
+        <p>{{ nearestTask?.title || "生成复习计划后自动显示最近节点" }}</p>
+      </div>
+      <div class="panel cue-panel trend-panel">
+        <span>本周学习趋势</span>
+        <div class="trend-bars" aria-label="本周学习趋势">
+          <i
+            v-for="item in weeklyTrend"
+            :key="item.label"
+            :style="{ height: `${Math.min(58, Math.max(16, item.value * 18))}px` }"
+            :title="`${item.label}：${item.value} 次`"
+          ></i>
+        </div>
+        <p>{{ weeklyTrendTotal }} 次学习行为</p>
+      </div>
+    </section>
+
     <section class="dashboard-grid">
       <div class="panel quick-ask-panel">
         <div class="panel-title">
@@ -150,6 +185,7 @@ import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
 
 import { askCourse, getCourses, getLearningProfile } from "../api/client";
+import { getApiErrorMessage } from "../api/errors";
 
 const router = useRouter();
 const loading = ref(false);
@@ -179,6 +215,54 @@ const todayTasks = computed(() => {
   if (pending.length) return pending.slice(0, 4);
   return profiles.value.flatMap((profile) => profile?.recommendations || []).slice(0, 4);
 });
+const recentQuestion = computed(() =>
+  newestByDate(profiles.value.flatMap((profile) => profile?.recent_questions || []))
+);
+const recentWrongAttempt = computed(() =>
+  newestByDate(
+    profiles.value
+      .flatMap((profile) => profile?.recent_attempts || [])
+      .filter((attempt) => !attempt.is_correct)
+  )
+);
+const nearestTask = computed(() => {
+  const datedTasks = profiles.value
+    .flatMap((profile) => profile?.pending_tasks || [])
+    .filter((task) => task.deadline)
+    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+  return datedTasks[0] || null;
+});
+const examCountdownText = computed(() => {
+  if (!nearestTask.value?.deadline) return "未安排";
+  const days = Math.max(0, Math.ceil((new Date(nearestTask.value.deadline) - new Date()) / 86400000));
+  return `${days} 天`;
+});
+const weeklyTrend = computed(() => {
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (6 - index));
+    return {
+      key: date.toISOString().slice(0, 10),
+      label: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()],
+      value: 0
+    };
+  });
+  const byKey = Object.fromEntries(days.map((day) => [day.key, day]));
+  const events = profiles.value.flatMap((profile) => [
+    ...(profile?.recent_questions || []),
+    ...(profile?.recent_attempts || [])
+  ]);
+  for (const event of events) {
+    const key = event.created_at ? new Date(event.created_at).toISOString().slice(0, 10) : "";
+    if (byKey[key]) byKey[key].value += 1;
+  }
+  if (events.length && days.every((day) => day.value === 0)) {
+    days[days.length - 1].value = events.length;
+  }
+  return days;
+});
+const weeklyTrendTotal = computed(() => weeklyTrend.value.reduce((sum, item) => sum + item.value, 0));
 const todayAdvice = computed(() => {
   if (!courses.value.length) return "先创建课程并上传资料，系统会自动生成学习画像。";
   if (primaryWeakPoint.value) {
@@ -198,6 +282,8 @@ async function loadDashboard() {
     profiles.value = await Promise.all(
       topCourses.map((course) => getLearningProfile(course.id).catch(() => null))
     );
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "首页数据加载失败，请检查后端服务是否启动"));
   } finally {
     loading.value = false;
   }
@@ -216,6 +302,8 @@ async function ask() {
   try {
     const result = await askCourse(selectedCourseId.value, quickQuestion.value.trim());
     quickAnswer.value = result.answer;
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "请求失败，请检查后端服务是否启动"));
   } finally {
     asking.value = false;
   }
@@ -227,5 +315,14 @@ function goPrimaryCourse(tab) {
     return;
   }
   router.push({ path: `/courses/${primaryCourse.value.id}`, query: { tab } });
+}
+
+function newestByDate(items) {
+  return [...items].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+}
+
+function formatDate(value) {
+  if (!value) return "未记录";
+  return new Date(value).toLocaleString();
 }
 </script>
