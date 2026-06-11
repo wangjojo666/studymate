@@ -58,6 +58,10 @@
                   />
                   <small>{{ ocrJobText(activeOcrJob(document.id)) }}</small>
                 </div>
+                <div v-else-if="isDocumentProcessing(document)" class="ocr-progress">
+                  <el-progress :percentage="document.processing_progress || 0" />
+                  <small>{{ statusText(document.status) }}</small>
+                </div>
               </div>
               <div class="document-actions">
                 <el-tag :type="statusType(document.status)">{{ statusText(document.status) }}</el-tag>
@@ -90,7 +94,7 @@
                   size="small"
                   type="danger"
                   plain
-                  :disabled="Boolean(activeOcrJob(document.id))"
+                  :disabled="Boolean(activeOcrJob(document.id)) || isDocumentProcessing(document)"
                   @click="removeDocument(document)"
                 >
                   删除
@@ -108,7 +112,10 @@
               <h2>智能问答</h2>
               <span>回答基于已入库课程片段，并展示来源页码</span>
             </div>
-            <el-tag>{{ lastProvider }}</el-tag>
+            <div class="provider-tags">
+              <el-tag type="info">检索：{{ lastRetrievalProvider }}</el-tag>
+              <el-tag>模型：{{ lastLlmProvider }}</el-tag>
+            </div>
           </div>
           <div class="chat-area">
             <div v-if="messages.length === 0" class="empty-chat">
@@ -260,6 +267,14 @@
                   placeholder="可选：粘贴自己的答案，系统会判断可能的错误和遗漏考点"
                 />
               </el-form-item>
+              <el-form-item label="样例输入">
+                <el-input
+                  v-model="cppForm.sample_input"
+                  type="textarea"
+                  :rows="3"
+                  placeholder="可选：提供 stdin 样例，编译通过后会限时运行"
+                />
+              </el-form-item>
             </el-form>
 
             <div class="cpp-result">
@@ -271,6 +286,29 @@
                 <div class="cpp-summary">
                   <strong>{{ cppAnalysis.summary }}</strong>
                   <el-tag>{{ cppAnalysis.provider }}</el-tag>
+                </div>
+                <div class="cpp-section">
+                  <h3>编译诊断</h3>
+                  <div class="cpp-issue-list">
+                    <div class="cpp-issue">
+                      <el-tag :type="cppAnalysis.compile_result?.success ? 'success' : 'danger'">
+                        {{ cppAnalysis.compile_result?.success ? "编译成功" : "编译未通过" }}
+                      </el-tag>
+                      <div>
+                        <strong>{{ cppAnalysis.compile_result?.command || "g++ main.cpp -std=c++17" }}</strong>
+                        <span>{{ cppAnalysis.compile_result?.stderr || "无编译错误输出" }}</span>
+                      </div>
+                    </div>
+                    <div v-if="cppAnalysis.run_result?.executed" class="cpp-issue">
+                      <el-tag :type="cppAnalysis.run_result?.success ? 'success' : 'danger'">
+                        {{ cppAnalysis.run_result?.timeout ? "运行超时" : cppAnalysis.run_result?.success ? "运行成功" : "运行失败" }}
+                      </el-tag>
+                      <div>
+                        <strong>样例运行输出</strong>
+                        <span>{{ cppAnalysis.run_result?.stdout || cppAnalysis.run_result?.stderr || "程序无输出" }}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="cpp-section">
                   <h3>考点识别</h3>
@@ -338,7 +376,7 @@
               <div v-for="point in diagnosisWeakPoints" :key="point.id" class="weak-item">
                 <div>
                   <strong>{{ point.name }}</strong>
-                  <span>{{ point.mastery_score }}% · 错题 {{ point.wrong_count }} 次</span>
+                  <span>{{ point.mastery_score }}% · {{ point.level_label }} · 错题 {{ point.wrong_count }} 次</span>
                 </div>
               </div>
             </div>
@@ -390,17 +428,20 @@ const practiceSources = ref([]);
 const practiceCount = ref(10);
 const practiceDifficulty = ref("basic");
 const practiceKnowledgePointId = ref(null);
-const lastProvider = ref("未调用");
+const lastLlmProvider = ref("未调用");
+const lastRetrievalProvider = ref("未调用");
 const ocrRunningId = ref(null);
 const visionRunningId = ref(null);
 const ocrJobs = ref({});
 const ocrPollTimer = ref(null);
+const documentPollTimer = ref(null);
 const analyzingCpp = ref(false);
 const cppAnalysis = ref(null);
 const cppForm = reactive({
   problem_text: "",
   code_text: "",
-  user_code: ""
+  user_code: "",
+  sample_input: ""
 });
 
 const knowledgePointOptions = computed(() => learningProfile.value?.knowledge_points || []);
@@ -414,7 +455,10 @@ const ringStyle = computed(() => {
 });
 
 onMounted(loadCourse);
-onBeforeUnmount(stopOcrPolling);
+onBeforeUnmount(() => {
+  stopOcrPolling();
+  stopDocumentPolling();
+});
 
 watch(
   () => route.query.tab,
@@ -432,6 +476,7 @@ async function loadCourse() {
     ]);
     course.value = courseData;
     learningProfile.value = profileData;
+    syncDocumentPolling(courseData.documents || []);
     messages.value = (courseData.recent_messages || [])
       .slice()
       .reverse()
@@ -460,7 +505,8 @@ async function handleUpload(options) {
     } else if (document.status === "empty") {
       ElMessage.warning(document.error_message || "未解析到可检索文本");
     } else {
-      ElMessage.success("资料解析完成");
+      ElMessage.info("资料已上传，后台解析入库中");
+      startDocumentPolling();
     }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "上传失败，请检查后端服务和文件格式"));
@@ -586,6 +632,28 @@ function stopOcrPolling() {
   }
 }
 
+function syncDocumentPolling(documents) {
+  if (documents.some((document) => isDocumentProcessing(document))) {
+    startDocumentPolling();
+  } else {
+    stopDocumentPolling();
+  }
+}
+
+function startDocumentPolling() {
+  if (documentPollTimer.value) return;
+  documentPollTimer.value = window.setInterval(() => {
+    loadCourse();
+  }, 2500);
+}
+
+function stopDocumentPolling() {
+  if (documentPollTimer.value) {
+    window.clearInterval(documentPollTimer.value);
+    documentPollTimer.value = null;
+  }
+}
+
 async function pollOcrJob(job) {
   try {
     const latest = await getOcrJob(props.id, job.document_id, job.id);
@@ -617,7 +685,8 @@ async function ask() {
   question.value = "";
   try {
     const result = await askCourse(props.id, currentQuestion);
-    lastProvider.value = result.provider || "unknown";
+    lastLlmProvider.value = result.llm_provider || result.provider || "unknown";
+    lastRetrievalProvider.value = result.retrieval_provider || "unknown";
     messages.value.push({
       id: Date.now(),
       question: currentQuestion,
@@ -637,7 +706,7 @@ async function makeOutline() {
   generatingOutline.value = true;
   try {
     const result = await generateOutline(props.id);
-    lastProvider.value = result.provider || "unknown";
+    lastLlmProvider.value = result.provider || "unknown";
     outline.value = result.content;
     outlineSources.value = result.sources;
   } catch (error) {
@@ -655,7 +724,7 @@ async function makePractice() {
       difficulty: practiceDifficulty.value,
       knowledge_point_id: practiceKnowledgePointId.value || null
     });
-    lastProvider.value = result.provider || "unknown";
+    lastLlmProvider.value = result.provider || "unknown";
     practice.value = result.content;
     practiceSources.value = result.sources;
     await loadCourse();
@@ -674,7 +743,7 @@ async function analyzeCpp() {
   analyzingCpp.value = true;
   try {
     cppAnalysis.value = await analyzeCppCode(props.id, cppForm);
-    lastProvider.value = cppAnalysis.value.provider || "rule/offline";
+    lastLlmProvider.value = cppAnalysis.value.provider || "rule/offline";
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "C++ 代码分析失败，请检查后端服务是否启动"));
   } finally {
@@ -698,6 +767,12 @@ function readCppFile(uploadFile) {
 
 function statusText(status) {
   return {
+    uploaded: "已上传，等待解析",
+    queued: "已上传，等待解析",
+    parsing: "正在解析文本",
+    chunking: "正在切分知识片段",
+    indexing: "正在写入向量库",
+    syncing_knowledge_points: "正在同步知识点",
     indexed: "已入库",
     processing: "解析中",
     needs_ocr: "需 OCR",
@@ -712,6 +787,12 @@ function statusText(status) {
 
 function statusType(status) {
   return {
+    uploaded: "info",
+    queued: "info",
+    parsing: "warning",
+    chunking: "warning",
+    indexing: "warning",
+    syncing_knowledge_points: "warning",
     indexed: "success",
     processing: "warning",
     needs_ocr: "warning",
@@ -722,6 +803,10 @@ function statusType(status) {
     failed: "danger",
     empty: "info"
   }[status] || "info";
+}
+
+function isDocumentProcessing(document) {
+  return ["uploaded", "queued", "parsing", "chunking", "indexing", "syncing_knowledge_points"].includes(document.status);
 }
 
 function canRunOcr(document) {

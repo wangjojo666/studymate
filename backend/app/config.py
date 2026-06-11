@@ -36,12 +36,18 @@ def _sqlite_url() -> str:
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "StudyMate")
+    app_env: str = os.getenv("APP_ENV", "development").lower()
     api_prefix: str = os.getenv("API_PREFIX", "/api")
     database_url: str = _sqlite_url()
     storage_dir: Path = _path_from_env("STORAGE_DIR", BASE_DIR / "storage")
     upload_dir: Path = _path_from_env("UPLOAD_DIR", BASE_DIR / "storage" / "uploads")
     chroma_dir: Path = _path_from_env("CHROMA_DIR", BASE_DIR / "storage" / "chroma")
+    embedding_provider: str = os.getenv("EMBEDDING_PROVIDER", "hash").lower()
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+    embedding_base_url: str = os.getenv("EMBEDDING_BASE_URL", "")
+    embedding_api_key: str = os.getenv("EMBEDDING_API_KEY", "")
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "384"))
+    embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",
@@ -81,3 +87,8 @@ class Settings:
 
 
 settings = Settings()
+
+
+def validate_runtime_settings() -> None:
+    if settings.app_env == "production" and settings.auth_secret_key == "studymate-dev-secret-change-me":
+        raise RuntimeError("APP_ENV=production 时必须修改 AUTH_SECRET_KEY，不能使用默认开发密钥。")

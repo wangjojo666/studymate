@@ -147,11 +147,14 @@ def _document_payload(document: Document) -> dict:
         "original_filename": document.original_filename,
         "file_type": document.file_type,
         "status": document.status,
+        "processing_stage": document.processing_stage,
+        "processing_progress": document.processing_progress,
         "page_count": document.page_count,
         "chunk_count": document.chunk_count,
         "error_message": document.error_message,
         "created_at": document.created_at,
         "updated_at": document.updated_at,
+        "indexed_at": document.indexed_at,
     }
 
 

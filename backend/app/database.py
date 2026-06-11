@@ -76,10 +76,23 @@ def _ensure_legacy_schema() -> None:
     if "courses" not in inspector.get_table_names():
         return
     course_columns = {column["name"] for column in inspector.get_columns("courses")}
+    document_columns = (
+        {column["name"] for column in inspector.get_columns("documents")}
+        if "documents" in inspector.get_table_names()
+        else set()
+    )
     with engine.begin() as connection:
         if "user_id" not in course_columns:
             connection.execute(text("ALTER TABLE courses ADD COLUMN user_id INTEGER"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_courses_user_id ON courses (user_id)"))
+        if "documents" in inspector.get_table_names():
+            if "processing_stage" not in document_columns:
+                connection.execute(text("ALTER TABLE documents ADD COLUMN processing_stage VARCHAR(60) DEFAULT 'indexed'"))
+            if "processing_progress" not in document_columns:
+                connection.execute(text("ALTER TABLE documents ADD COLUMN processing_progress INTEGER DEFAULT 100"))
+            if "indexed_at" not in document_columns:
+                connection.execute(text("ALTER TABLE documents ADD COLUMN indexed_at DATETIME"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_documents_processing_stage ON documents (processing_stage)"))
 
 
 def _get_or_create_demo_user(db: Session):

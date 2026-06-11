@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 from app.models.entities import ChatMessage, Course, Document, GeneratedMaterial, KnowledgePoint
 from app.services.learning_service import DIFFICULTY_LABELS, sync_course_knowledge_points
 from app.services.llm_service import call_llm, offline_answer, offline_outline, offline_practice
-from app.services.vector_store import SearchResult, get_representative_chunks, search_course
+from app.services.vector_store import (
+    SearchResult,
+    get_representative_chunks,
+    retrieval_provider_from_results,
+    search_course,
+)
 
 
 OFFLINE_PROVIDER = "mock/offline"
@@ -18,6 +23,7 @@ def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) 
     sources = search_course(db, course_id, question, top_k)
     if not sources:
         sources = get_representative_chunks(db, course_id, top_k)
+    retrieval_provider = retrieval_provider_from_results(sources)
     context = _build_context(sources)
     if sources:
         messages = [
@@ -35,10 +41,10 @@ def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) 
         ]
         llm_response = call_llm(messages)
         answer = llm_response.content if llm_response else offline_answer(question, context)
-        provider = llm_response.used_provider if llm_response else OFFLINE_PROVIDER
+        llm_provider = llm_response.used_provider if llm_response else OFFLINE_PROVIDER
     else:
         answer = _empty_knowledge_base_message(db, course_id)
-        provider = "system"
+        llm_provider = "system"
     source_payload = _sources_payload(sources)
 
     db.add(
@@ -53,7 +59,13 @@ def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) 
     if course:
         course.last_asked_at = datetime.utcnow()
     db.commit()
-    return {"answer": answer, "sources": source_payload, "provider": provider}
+    return {
+        "answer": answer,
+        "sources": source_payload,
+        "provider": llm_provider,
+        "llm_provider": llm_provider,
+        "retrieval_provider": retrieval_provider,
+    }
 
 
 def generate_outline(db: Session, course_id: int) -> dict:

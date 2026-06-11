@@ -7,6 +7,7 @@
         <p>把课程资料、RAG 问答、练习诊断和复习计划汇总成一份可下载的 PDF 学习报告。</p>
       </div>
       <div class="report-actions">
+        <span class="report-note">报告将汇总资料、问答、练习、薄弱知识点和复习计划。</span>
         <el-select v-model="selectedCourseId" placeholder="选择课程" size="large">
           <el-option v-for="course in courses" :key="course.id" :label="course.name" :value="course.id" />
         </el-select>
@@ -72,7 +73,7 @@
           <div v-for="point in weakPoints.slice(0, 5)" :key="point.id" class="weak-item">
             <div>
               <strong>{{ point.name }}</strong>
-              <span>{{ point.mastery_score }}% · 错题 {{ point.wrong_count }} 次</span>
+              <span>{{ point.mastery_score }}% · {{ point.level_label }} · 错题 {{ point.wrong_count }} 次</span>
             </div>
             <el-tag :type="point.state === 'weak' ? 'danger' : 'warning'">{{ point.state }}</el-tag>
           </div>
@@ -90,6 +91,7 @@ import { useRouter } from "vue-router";
 
 import { downloadLearningReport, getCourses, getLearningProfile } from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
+import { saveBlob } from "../utils/download";
 
 const router = useRouter();
 const loading = ref(false);
@@ -103,7 +105,7 @@ const summary = computed(() => profile.value?.summary || {});
 const weakPoints = computed(() => profile.value?.weak_points || []);
 const flowSteps = [
   { key: "upload", title: "上传资料", meta: "PDF / PPTX / DOCX / TXT", tab: "docs", icon: "Upload" },
-  { key: "ask", title: "智能问答", meta: "Embedding + Chroma 检索", tab: "qa", icon: "ChatLineRound" },
+  { key: "ask", title: "智能问答", meta: "可配置 embedding + 兜底检索", tab: "qa", icon: "ChatLineRound" },
   { key: "practice", title: "专项练习", meta: "按薄弱点生成题目", tab: "practice", icon: "EditPen" },
   { key: "report", title: "导出报告", meta: "PDF 学习诊断", tab: "diagnosis", icon: "Document" }
 ];
@@ -159,12 +161,7 @@ async function exportReport() {
   exporting.value = true;
   try {
     const blob = await downloadLearningReport(selectedCourseId.value);
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `studymate-course-${selectedCourseId.value}-learning-report.pdf`;
-    link.click();
-    URL.revokeObjectURL(url);
+    saveBlob(blob, `studymate-course-${selectedCourseId.value}-learning-report.pdf`);
     ElMessage.success("报告已导出");
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "报告导出失败"));

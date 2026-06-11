@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
+from app.config import settings, validate_runtime_settings
 from app.database import init_database
 from app.routers import assistant, auth, courses, cpp_tools, documents, learning
 
@@ -32,6 +32,7 @@ app.include_router(cpp_tools.router, prefix=settings.api_prefix)
 
 @app.on_event("startup")
 def on_startup() -> None:
+    validate_runtime_settings()
     init_database()
 
 

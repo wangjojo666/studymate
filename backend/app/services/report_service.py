@@ -7,7 +7,7 @@ from io import BytesIO
 
 from sqlalchemy.orm import Session
 
-from app.models.entities import Course
+from app.models.entities import ChatMessage, Course, Document, QuestionAttempt, ReviewTask, User
 from app.services.learning_service import get_learning_profile, get_wrong_attempts
 from app.services.llm_service import call_llm
 
@@ -32,6 +32,17 @@ def generate_learning_report_pdf(db: Session, course_id: int, user_id: str | Non
     font_name = "STSong-Light"
     profile = get_learning_profile(db, course_id, user_id)
     wrong_attempts = get_wrong_attempts(db, course_id, limit=50, user_id=user_id)
+    user = _load_user(db, user_id)
+    documents = (
+        db.query(Document)
+        .filter(Document.course_id == course_id)
+        .order_by(Document.created_at.asc())
+        .all()
+    )
+    review_query = db.query(ReviewTask).filter(ReviewTask.course_id == course_id)
+    if user_id:
+        review_query = review_query.filter(ReviewTask.user_id == str(user_id))
+    review_tasks = review_query.order_by(ReviewTask.deadline.asc().nullslast(), ReviewTask.created_at.desc()).limit(12).all()
     advice = _ai_advice(course.name, profile, wrong_attempts)
 
     buffer = BytesIO()
@@ -71,23 +82,36 @@ def generate_learning_report_pdf(db: Session, course_id: int, user_id: str | Non
         leading=15,
         textColor=colors.HexColor("#334155"),
     )
+    lead_style = ParagraphStyle(
+        "StudyMateLead",
+        parent=body_style,
+        fontName=font_name,
+        fontSize=11,
+        leading=18,
+        textColor=colors.HexColor("#1f2937"),
+        spaceAfter=6,
+    )
 
     story = [
-        Paragraph(f"{escape(course.name)} 学习报告", title_style),
+        Paragraph("StudyMate 学习诊断报告", title_style),
+        Paragraph(f"课程名称：{escape(course.name)}", lead_style),
         Paragraph(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", body_style),
+        Paragraph(f"用户：{escape(_user_label(user, user_id))}", body_style),
         Spacer(1, 8),
         Paragraph("学习总览", heading_style),
-        _summary_table(profile, body_style, Table, TableStyle, colors),
+        _overview_table(db, course_id, profile, body_style, Table, TableStyle, colors),
         Paragraph("薄弱知识点 Top 5", heading_style),
         _weak_points_table(profile, body_style, Table, TableStyle, colors),
         Paragraph("错题原因分布", heading_style),
         _wrong_reason_table(wrong_attempts, body_style, Table, TableStyle, colors),
-        Paragraph("最近练习记录", heading_style),
-        _recent_attempts_table(profile, body_style, Table, TableStyle, colors),
-        Paragraph("下周复习计划", heading_style),
-        _next_week_plan(profile, body_style, Table, TableStyle, colors),
+        Paragraph("最近错题分析", heading_style),
+        _recent_wrong_table(wrong_attempts, body_style, Table, TableStyle, colors),
+        Paragraph("复习计划", heading_style),
+        _review_plan_table(review_tasks, profile, body_style, Table, TableStyle, colors),
         Paragraph("AI 建议", heading_style),
         Paragraph(_paragraph(advice), body_style),
+        Paragraph("来源说明", heading_style),
+        _source_table(documents, body_style, Table, TableStyle, colors),
     ]
 
     def draw_footer(canvas, document):
@@ -100,6 +124,35 @@ def generate_learning_report_pdf(db: Session, course_id: int, user_id: str | Non
 
     doc.build(story, onFirstPage=draw_footer, onLaterPages=draw_footer)
     return buffer.getvalue()
+
+
+def _load_user(db: Session, user_id: str | None) -> User | None:
+    if not user_id or not str(user_id).isdigit():
+        return None
+    return db.get(User, int(user_id))
+
+
+def _user_label(user: User | None, user_id: str | None) -> str:
+    if user is None:
+        return str(user_id or "未登录用户")
+    name = user.display_name or user.email
+    return f"{name}（{user.email}）"
+
+
+def _overview_table(db: Session, course_id: int, profile: dict, body_style, Table, TableStyle, colors):
+    summary = profile.get("summary", {})
+    question_count = db.query(ChatMessage).filter(ChatMessage.course_id == course_id).count()
+    practice_count = db.query(QuestionAttempt).filter(QuestionAttempt.course_id == course_id).count()
+    rows = [
+        ["指标", "数值", "说明"],
+        ["上传资料数", str(summary.get("document_count", 0)), "课程已保存的 PDF/PPTX/DOCX/TXT/图片资料"],
+        ["知识片段数", str(summary.get("chunk_count", 0)), "已入库并可参与检索的资料片段"],
+        ["提问次数", str(question_count), "课程问答记录数"],
+        ["练习次数", str(practice_count), "写入错题本或学习画像的练习记录"],
+        ["正确率", f"{summary.get('practice_accuracy', 0)}%", "基于已记录练习结果"],
+        ["总体掌握度", f"{summary.get('overall_mastery', 0)}%", "知识点掌握度均值，范围 0-100"],
+    ]
+    return _table(rows, body_style, Table, TableStyle, colors, widths=[30, 26, 118])
 
 
 def _summary_table(profile: dict, body_style, Table, TableStyle, colors):
@@ -117,9 +170,9 @@ def _summary_table(profile: dict, body_style, Table, TableStyle, colors):
 
 def _weak_points_table(profile: dict, body_style, Table, TableStyle, colors):
     points = profile.get("weak_points", [])[:5]
-    rows = [["排名", "知识点", "掌握度", "错题", "建议"]]
+    rows = [["排名", "知识点", "掌握度", "错题", "主要错因", "推荐复习动作"]]
     if not points:
-        rows.append(["-", "暂无", "-", "-", "先上传资料并记录练习结果。"])
+        rows.append(["-", "暂无", "-", "-", "暂无", "先上传资料并记录练习结果。"])
     for index, point in enumerate(points, start=1):
         rows.append(
             [
@@ -127,10 +180,11 @@ def _weak_points_table(profile: dict, body_style, Table, TableStyle, colors):
                 point.get("name", ""),
                 f"{point.get('mastery_score', 0)}%",
                 str(point.get("wrong_count", 0)),
-                f"回看 P{point.get('source_page') or '-'}，做 3 道同类题。",
+                point.get("main_error_label") or "未分类",
+                point.get("explanation") or f"回看 P{point.get('source_page') or '-'}，做 3 道同类题。",
             ]
         )
-    return _table(rows, body_style, Table, TableStyle, colors, widths=[16, 42, 24, 18, 74])
+    return _table(rows, body_style, Table, TableStyle, colors, widths=[14, 34, 20, 16, 28, 62])
 
 
 def _wrong_reason_table(wrong_attempts: list[dict], body_style, Table, TableStyle, colors):
@@ -158,6 +212,69 @@ def _recent_attempts_table(profile: dict, body_style, Table, TableStyle, colors)
             ]
         )
     return _table(rows, body_style, Table, TableStyle, colors, widths=[34, 42, 22, 76])
+
+
+def _recent_wrong_table(wrong_attempts: list[dict], body_style, Table, TableStyle, colors):
+    rows = [["题目", "用户答案", "正确答案", "错因", "关联知识点"]]
+    if not wrong_attempts:
+        rows.append(["暂无数据", "暂无数据", "暂无数据", "暂无数据", "暂无数据"])
+    for item in wrong_attempts[:8]:
+        rows.append(
+            [
+                _short(item.get("question_text"), 90),
+                _short(item.get("user_answer") or "未填写", 60),
+                _short(item.get("correct_answer") or "未填写", 60),
+                item.get("error_reason") or "未分类",
+                item.get("knowledge_point_name") or "未标注",
+            ]
+        )
+    return _table(rows, body_style, Table, TableStyle, colors, widths=[48, 32, 32, 30, 32])
+
+
+def _review_plan_table(review_tasks: list[ReviewTask], profile: dict, body_style, Table, TableStyle, colors):
+    rows = [["日期", "任务标题", "任务类型", "状态"]]
+    tasks = review_tasks[:8]
+    if not tasks and profile.get("recommendations"):
+        today = datetime.now().date()
+        for index, item in enumerate(profile.get("recommendations", [])[:5]):
+            rows.append(
+                [
+                    (today + timedelta(days=index)).isoformat(),
+                    item.get("title", ""),
+                    item.get("difficulty", "review"),
+                    "建议执行",
+                ]
+            )
+    elif not tasks:
+        rows.append([datetime.now().date().isoformat(), "暂无数据：先上传资料并记录练习", "初始化", "待生成"])
+    else:
+        for task in tasks:
+            rows.append(
+                [
+                    _date_text(task.deadline),
+                    task.title,
+                    task.task_type,
+                    task.status,
+                ]
+            )
+    return _table(rows, body_style, Table, TableStyle, colors, widths=[30, 78, 34, 32])
+
+
+def _source_table(documents: list[Document], body_style, Table, TableStyle, colors):
+    rows = [["资料名", "页码/来源", "片段数", "状态"]]
+    if not documents:
+        rows.append(["暂无数据", "暂无数据", "0", "暂无资料"])
+    for document in documents[:12]:
+        page_text = f"1-{document.page_count} 页" if document.page_count else "暂无页码"
+        rows.append(
+            [
+                document.original_filename,
+                page_text,
+                str(document.chunk_count),
+                document.status,
+            ]
+        )
+    return _table(rows, body_style, Table, TableStyle, colors, widths=[78, 36, 24, 36])
 
 
 def _next_week_plan(profile: dict, body_style, Table, TableStyle, colors):
@@ -247,6 +364,12 @@ def _date_text(value: object) -> str:
 def _paragraph(value: object) -> str:
     text = "" if value is None else str(value)
     return escape(text).replace("\n", "<br/>")
+
+
+def _short(value: object, limit: int) -> str:
+    text = "" if value is None else str(value)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else f"{text[:limit]}..."
 
 
 def _generate_simple_report_pdf(db: Session, course_id: int, user_id: str | None) -> bytes:

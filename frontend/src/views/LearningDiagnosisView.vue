@@ -11,7 +11,8 @@
         <p>{{ course?.name || "课程" }} · 系统根据提问、练习和错题记录动态评估每个知识点的掌握程度。</p>
       </div>
       <div class="toolbar-actions">
-        <el-button @click="downloadReport">
+        <span class="report-note">报告将汇总资料、问答、练习、薄弱知识点和复习计划。</span>
+        <el-button :loading="exportingReport" @click="downloadReport">
           <el-icon><Document /></el-icon>
           导出 PDF 报告
         </el-button>
@@ -129,7 +130,8 @@
           <div v-for="point in weakPoints.slice(0, 5)" :key="point.id" class="weak-item">
             <div>
               <strong>{{ point.name }}</strong>
-              <span>{{ point.mastery_score }}% · 错题 {{ point.wrong_count }} 次</span>
+              <span>{{ point.mastery_score }}% · {{ point.level_label }} · 错题 {{ point.wrong_count }} 次</span>
+              <p>{{ point.explanation }}</p>
             </div>
             <el-button size="small" @click="prepareAttempt(point)">记录练习</el-button>
           </div>
@@ -284,6 +286,7 @@ import {
 } from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
 import { chartColors, chartPalette, masteryColor } from "../theme/chartTheme";
+import { saveBlob } from "../utils/download";
 
 use([
   BarChart,
@@ -308,6 +311,7 @@ const plan = ref(null);
 const loading = ref(false);
 const submittingAttempt = ref(false);
 const generatingPlan = ref(false);
+const exportingReport = ref(false);
 
 const attemptForm = reactive({
   knowledge_point_id: null,
@@ -546,16 +550,15 @@ async function markTaskDone(task) {
 }
 
 async function downloadReport() {
+  exportingReport.value = true;
   try {
     const blob = await downloadLearningReport(props.id);
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `studymate-course-${props.id}-learning-report.pdf`;
-    link.click();
-    URL.revokeObjectURL(url);
+    saveBlob(blob, `studymate-course-${props.id}-learning-report.pdf`);
+    ElMessage.success("报告已导出");
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "报告导出失败，请检查后端服务是否启动"));
+  } finally {
+    exportingReport.value = false;
   }
 }
 

@@ -23,6 +23,12 @@ from app.models.entities import (
 )
 from app.schemas import AttemptCreate, ReviewPlanRequest
 from app.services.llm_service import call_llm
+from app.services.mastery_service import (
+    apply_mastery_to_status,
+    calculate_mastery,
+    classify_error_type,
+    mastery_delta,
+)
 
 
 DEMO_USER_ID = "demo-user"
@@ -318,15 +324,12 @@ def record_question_attempt(
     status_payload = None
     if point:
         status = _ensure_status(db, course_id, point.id, user_id)
-        delta = _mastery_delta(payload.difficulty, payload.is_correct)
-        status.mastery_score = max(0.0, min(100.0, status.mastery_score + delta))
-        status.review_count += 1
-        status.last_review_time = datetime.utcnow()
-        if not payload.is_correct:
-            status.wrong_count += 1
-            _create_wrong_task(db, course_id, point, error_reason, payload.difficulty, user_id)
         db.flush()
-        status_payload = _status_payload(point, status)
+        if not payload.is_correct:
+            _create_wrong_task(db, course_id, point, error_reason, payload.difficulty, user_id)
+        apply_mastery_to_status(db, point, status, user_id)
+        db.flush()
+        status_payload = _status_payload(db, point, status, user_id)
 
     db.commit()
     db.refresh(attempt)
@@ -664,7 +667,7 @@ def _ensure_status(db: Session, course_id: int, point_id: int, user_id: str) -> 
         user_id=user_id,
         course_id=course_id,
         knowledge_point_id=point_id,
-        mastery_score=55.0,
+        mastery_score=60.0,
     )
     db.add(status)
     db.flush()
@@ -685,24 +688,33 @@ def _knowledge_status_payloads(db: Session, course_id: int, user_id: str) -> lis
         .order_by(KnowledgePoint.id.asc())
         .all()
     )
-    return [_status_payload(point, status) for point, status in rows]
+    return [_status_payload(db, point, status, user_id) for point, status in rows]
 
 
-def _status_payload(point: KnowledgePoint, status: UserKnowledgeStatus) -> dict:
-    score = _decayed_mastery(status)
+def _status_payload(db: Session, point: KnowledgePoint, status: UserKnowledgeStatus, user_id: str) -> dict:
+    mastery = calculate_mastery(db, point, status, user_id)
+    score = mastery.score
+    state = _mastery_state(score)
     return {
         "id": point.id,
         "name": point.name,
         "description": point.description,
         "mastery_score": score,
         "raw_mastery_score": round(status.mastery_score, 1),
-        "wrong_count": status.wrong_count,
-        "review_count": status.review_count,
-        "last_review_time": status.last_review_time,
+        "level": mastery.level,
+        "level_label": mastery.level_label,
+        "correct_count": mastery.correct_count,
+        "wrong_count": mastery.wrong_count,
+        "review_count": mastery.correct_count + mastery.wrong_count,
+        "last_practiced_at": mastery.last_practiced_at,
+        "last_review_time": mastery.last_practiced_at,
+        "main_error_type": mastery.main_error_type,
+        "main_error_label": mastery.main_error_label,
+        "explanation": mastery.explanation,
         "source_page": point.source_page,
         "source_document_id": point.source_document_id,
         "evidence": point.evidence[:180] if point.evidence else "",
-        "state": _mastery_state(score),
+        "state": state,
     }
 
 
@@ -732,9 +744,12 @@ def _recommendations_from_weak_points(weak_points: list[dict]) -> list[dict]:
                 "rank": index,
                 "knowledge_point_id": point["id"],
                 "title": f"先复习{point['name']}",
-                "reason": f"掌握度 {point['mastery_score']}%，错题 {point['wrong_count']} 次",
+                "reason": point.get("explanation")
+                or f"掌握度 {point['mastery_score']}%，错题 {point['wrong_count']} 次",
                 "action": f"{page_text}，再做 3 道{DIFFICULTY_LABELS[difficulty]}和 1 道变式题。",
                 "difficulty": difficulty,
+                "main_error_type": point.get("main_error_type", "unknown"),
+                "main_error_label": point.get("main_error_label", "未分类"),
             }
         )
     return recommendations
@@ -758,19 +773,20 @@ def _infer_error_reason(payload: AttemptCreate) -> str:
     if payload.is_correct:
         return "掌握较好"
     text = f"{payload.question_text} {payload.user_answer} {payload.correct_answer}"
-    if any(symbol in text for symbol in ("=", "+", "-", "∫", "lim", "公式")):
-        return "公式记错"
-    if len(payload.user_answer.strip()) < 8:
-        return "概念不清"
-    if any(word in payload.question_text for word in ("步骤", "证明", "推导", "计算")):
+    error_type = classify_error_type("", payload.question_text, text)
+    if error_type == "formula_error":
+        return "公式/定义记忆错误"
+    if error_type == "procedure_gap":
         return "步骤跳跃"
-    return "题型识别错误"
+    if error_type == "coding_syntax":
+        return "代码语法错误"
+    if len(payload.user_answer.strip()) < 8:
+        return "概念混淆"
+    return "未分类"
 
 
 def _mastery_delta(difficulty: str, is_correct: bool) -> float:
-    if is_correct:
-        return {"basic": 8, "advanced": 11, "exam": 13, "mistake": 10}.get(difficulty, 8)
-    return {"basic": -16, "advanced": -15, "exam": -12, "mistake": -15}.get(difficulty, -15)
+    return mastery_delta(difficulty, is_correct)
 
 
 def _create_wrong_task(

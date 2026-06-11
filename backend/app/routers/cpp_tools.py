@@ -34,4 +34,5 @@ def analyze_cpp(
         problem_text=payload.problem_text,
         code_text=payload.code_text,
         user_code=payload.user_code,
+        sample_input=payload.sample_input,
     )

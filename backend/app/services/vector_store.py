@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.entities import ChunkKnowledgePoint, Document, DocumentChunk
 from app.services.chunker import TextChunk
+from app.services.embedding_service import embed_texts, embedding_provider_label
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class SearchResult:
     chunk_index: int
     content: str
     score: float
+    retrieval_provider: str = "sqlite_sparse"
 
 
 def tokenize(text: str) -> list[str]:
@@ -57,23 +59,7 @@ def vectorize(text: str) -> tuple[dict[str, float], float]:
 
 
 def embed_text(text: str) -> list[float]:
-    dimension = max(32, int(settings.embedding_dimension))
-    vector = [0.0] * dimension
-    tokens = tokenize(text)
-    if not tokens:
-        return vector
-
-    counts = Counter(tokens)
-    for token, count in counts.items():
-        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
-        index = int.from_bytes(digest[:4], "big") % dimension
-        sign = 1.0 if digest[4] & 1 else -1.0
-        vector[index] += sign * (1.0 + math.log(count))
-
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm == 0:
-        return vector
-    return [value / norm for value in vector]
+    return embed_texts([text]).vectors[0]
 
 
 def index_document_chunks(
@@ -156,6 +142,12 @@ def search_course(db: Session, course_id: int, query: str, limit: int = 5) -> li
     return _search_course_sqlite(db, course_id, query, limit)
 
 
+def retrieval_provider_from_results(results: list[SearchResult]) -> str:
+    if not results:
+        return f"no_match/{embedding_provider_label()}"
+    return results[0].retrieval_provider
+
+
 def delete_chunks_from_index(chunk_ids: list[int]) -> None:
     if not chunk_ids:
         return
@@ -204,9 +196,10 @@ def get_representative_chunks(db: Session, course_id: int, limit: int = 8) -> li
             document_name=document.original_filename,
             page_number=chunk.page_number,
             chunk_index=chunk.chunk_index,
-            content=chunk.content,
-            score=1.0,
-        )
+                content=chunk.content,
+                score=1.0,
+                retrieval_provider="representative_chunks",
+            )
         for chunk, document in rows
     ]
 
@@ -245,6 +238,7 @@ def _search_course_sqlite(db: Session, course_id: int, query: str, limit: int) -
                 chunk_index=chunk.chunk_index,
                 content=chunk.content,
                 score=score,
+                retrieval_provider="sqlite_sparse",
             )
         )
     results.sort(key=lambda item: item.score, reverse=True)
@@ -259,13 +253,11 @@ def _upsert_chroma_chunks(chunks: list[DocumentChunk]) -> None:
         return
 
     ids: list[str] = []
-    embeddings: list[list[float]] = []
     documents: list[str] = []
     metadatas: list[dict] = []
     for chunk in chunks:
         document_name = chunk.document.original_filename if chunk.document else ""
         ids.append(_chunk_chroma_id(chunk.id))
-        embeddings.append(embed_text(chunk.content))
         documents.append(chunk.content)
         metadatas.append(
             {
@@ -277,7 +269,11 @@ def _upsert_chroma_chunks(chunks: list[DocumentChunk]) -> None:
             }
         )
     try:
-        collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+        batch = embed_texts(documents, purpose="document")
+        for metadata in metadatas:
+            metadata["embedding_provider"] = batch.provider
+            metadata["embedding_dimension"] = batch.dimension
+        collection.upsert(ids=ids, embeddings=batch.vectors, documents=documents, metadatas=metadatas)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to upsert Chroma chunks: %s", exc)
 
@@ -287,8 +283,9 @@ def _search_chroma_course(course_id: int, query: str, limit: int) -> list[Search
     if collection is None or not query.strip():
         return []
     try:
+        query_batch = embed_texts([query], purpose="query")
         response = collection.query(
-            query_embeddings=[embed_text(query)],
+            query_embeddings=query_batch.vectors,
             n_results=limit,
             where={"course_id": course_id},
             include=["documents", "metadatas", "distances"],
@@ -316,6 +313,7 @@ def _search_chroma_course(course_id: int, query: str, limit: int) -> list[Search
                 chunk_index=int(metadata.get("chunk_index") or 0),
                 content=content,
                 score=score,
+                retrieval_provider=f"chroma/{metadata.get('embedding_provider') or query_batch.provider}",
             )
         )
     return results

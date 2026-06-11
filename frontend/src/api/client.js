@@ -22,7 +22,11 @@ http.interceptors.response.use(
   (error) => {
     if (error?.response?.status === 401) {
       clearAuthSession();
+      if (window.location.pathname !== "/login") {
+        window.location.assign(`/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+      }
     }
+    error.userMessage = normalizeApiError(error);
     return Promise.reject(error);
   }
 );
@@ -172,4 +176,23 @@ export async function downloadLearningReport(courseId) {
     responseType: "blob"
   });
   return data;
+}
+
+function normalizeApiError(error) {
+  if (error?.code === "ECONNABORTED") {
+    return "请求超时，任务可能仍在后台运行，请稍后刷新状态";
+  }
+  if (error?.code === "ERR_NETWORK") {
+    return "后端服务未启动或网络异常";
+  }
+  const status = error?.response?.status;
+  const detail = error?.response?.data?.detail;
+  if (status === 401) return "登录已过期，请重新登录";
+  if ([400, 404, 409, 413, 500].includes(status) && detail) {
+    if (Array.isArray(detail)) {
+      return detail.map((item) => item?.msg || item?.message || String(item)).filter(Boolean).join("；");
+    }
+    return String(detail);
+  }
+  return "";
 }

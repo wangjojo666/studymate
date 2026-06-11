@@ -59,11 +59,14 @@ class Document(Base):
     file_type: Mapped[str] = mapped_column(String(20), nullable=False)
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(40), default="processing", index=True)
+    processing_stage: Mapped[str] = mapped_column(String(60), default="uploaded", index=True)
+    processing_progress: Mapped[int] = mapped_column(Integer, default=0)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     course: Mapped[Course] = relationship(back_populates="documents")
     chunks: Mapped[list["DocumentChunk"]] = relationship(

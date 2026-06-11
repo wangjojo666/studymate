@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.services.cpp_compile_service import compile_and_run_cpp
 from app.services.llm_service import call_llm
 
 
@@ -35,6 +36,7 @@ def analyze_cpp_code(
     problem_text: str,
     code_text: str,
     user_code: str = "",
+    sample_input: str = "",
 ) -> dict:
     reference_code = code_text.strip()
     submitted_code = user_code.strip()
@@ -42,9 +44,25 @@ def analyze_cpp_code(
     combined = "\n".join(part for part in (problem_text.strip(), reference_code, submitted_code) if part)
 
     exam_points = _detect_exam_points(combined)
+    compile_payload = compile_and_run_cpp(target_code, sample_input)
     error_diagnosis = _diagnose_cpp_errors(target_code, reference_code if submitted_code else "")
-    explanation = _offline_explanation(problem_text, reference_code, submitted_code, exam_points, error_diagnosis)
-    llm_response = _llm_cpp_explanation(course_name, problem_text, reference_code, submitted_code, exam_points)
+    error_diagnosis = _compile_issues(compile_payload) + error_diagnosis
+    explanation = _offline_explanation(
+        problem_text,
+        reference_code,
+        submitted_code,
+        exam_points,
+        error_diagnosis,
+        compile_payload,
+    )
+    llm_response = _llm_cpp_explanation(
+        course_name,
+        problem_text,
+        reference_code,
+        submitted_code,
+        exam_points,
+        compile_payload,
+    )
     provider = llm_response.used_provider if llm_response else OFFLINE_CPP_PROVIDER
     if llm_response:
         explanation = llm_response.content
@@ -56,6 +74,8 @@ def analyze_cpp_code(
         "explanation": explanation,
         "similar_exercises": _similar_exercises(exam_points),
         "error_diagnosis": error_diagnosis,
+        "compile_result": compile_payload["compile_result"],
+        "run_result": compile_payload["run_result"],
     }
 
 
@@ -139,11 +159,24 @@ def _offline_explanation(
     submitted_code: str,
     exam_points: list[dict],
     error_diagnosis: list[dict],
+    compile_payload: dict,
 ) -> str:
     code = submitted_code or reference_code
     lines = [line.rstrip() for line in code.splitlines() if line.strip()]
     point_lines = "\n".join(f"- {point['name']}：{point['exam_hint']}" for point in exam_points)
     issue_lines = "\n".join(f"- [{item['level']}] {item['title']}：{item['detail']}" for item in error_diagnosis)
+    compile_result = compile_payload.get("compile_result", {})
+    run_result = compile_payload.get("run_result", {})
+    compile_lines = [
+        f"- 编译器：{compile_result.get('compiler', 'g++')}",
+        f"- 编译状态：{'成功' if compile_result.get('success') else '失败或未执行'}",
+    ]
+    if compile_result.get("stderr"):
+        compile_lines.append(f"- 编译输出：{compile_result.get('stderr')[:500]}")
+    if run_result.get("executed"):
+        compile_lines.append(f"- 运行状态：{'成功' if run_result.get('success') else '失败'}")
+        if run_result.get("stdout"):
+            compile_lines.append(f"- 标准输出：{run_result.get('stdout')[:500]}")
     structure = _code_structure(lines)
     problem_part = f"\n题目理解：{problem_text.strip()}\n" if problem_text.strip() else ""
     return (
@@ -155,7 +188,9 @@ def _offline_explanation(
         "## 考点识别\n"
         f"{point_lines or '- 暂未识别到典型 C++ 考点。'}\n\n"
         "## 错误诊断\n"
-        f"{issue_lines}"
+        f"{issue_lines}\n\n"
+        "## 编译诊断\n"
+        f"{chr(10).join(compile_lines)}"
     )
 
 
@@ -165,6 +200,7 @@ def _llm_cpp_explanation(
     reference_code: str,
     submitted_code: str,
     exam_points: list[dict],
+    compile_payload: dict,
 ):
     code = submitted_code or reference_code
     if not code.strip():
@@ -184,11 +220,36 @@ def _llm_cpp_explanation(
                 f"参考/题目代码：\n```cpp\n{reference_code[:8000]}\n```\n"
                 f"用户代码：\n```cpp\n{submitted_code[:8000]}\n```\n"
                 f"规则识别考点：{[point['name'] for point in exam_points]}\n"
-                "请按“代码解释、考点、易错点、同类训练方向、用户代码问题”组织。"
+                f"本地编译诊断：{compile_payload}\n"
+                "请按“代码解释、考点、编译错误解释、易错点、同类训练方向、修改建议”组织。"
             ),
         },
     ]
     return call_llm(messages, temperature=0.1)
+
+
+def _compile_issues(compile_payload: dict) -> list[dict]:
+    compile_result = compile_payload.get("compile_result", {})
+    run_result = compile_payload.get("run_result", {})
+    issues: list[dict] = []
+    if not compile_result.get("compiler_available", True):
+        issues.append(_issue("info", "未检测到 g++", compile_result.get("stderr") or "本机未安装 g++，已跳过编译诊断。"))
+        return issues
+    if compile_result.get("timeout"):
+        issues.append(_issue("error", "编译超时", "编译时间超过限制，可能存在模板递归过深或环境异常。"))
+    elif compile_result.get("success"):
+        issues.append(_issue("ok", "本地编译通过", "代码已通过 g++ -std=c++17 -Wall -Wextra -O0 编译。"))
+    else:
+        detail = compile_result.get("stderr") or "g++ 返回非 0 状态。"
+        issues.append(_issue("error", "本地编译失败", detail[:900]))
+    if run_result.get("executed"):
+        if run_result.get("timeout"):
+            issues.append(_issue("error", "样例运行超时", "程序运行超过时间限制，可能存在死循环或阻塞输入。"))
+        elif run_result.get("success"):
+            issues.append(_issue("ok", "样例运行成功", (run_result.get("stdout") or "程序无输出")[:500]))
+        else:
+            issues.append(_issue("error", "样例运行失败", (run_result.get("stderr") or "程序返回非 0 状态")[:500]))
+    return issues[:6]
 
 
 def _similar_exercises(exam_points: list[dict]) -> list[dict]:

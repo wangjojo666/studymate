@@ -13,4 +13,5 @@ alembic==1.14.0
 reportlab>=4.2.5
 chromadb==0.5.23
 
-# Optional production parser upgrades can be added here.
+# Optional semantic embedding upgrade:
+# sentence-transformers>=3.3.1

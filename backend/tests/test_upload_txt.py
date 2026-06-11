@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 
+def _document_from_course(client, course_id: int, document_id: int) -> dict:
+    course_detail = client.get(f"/api/courses/{course_id}")
+    assert course_detail.status_code == 200
+    return next(document for document in course_detail.json()["documents"] if document["id"] == document_id)
+
+
 def test_upload_txt_then_ask_outline_and_profile(client):
     course_response = client.post(
         "/api/courses",
@@ -20,8 +26,12 @@ def test_upload_txt_then_ask_outline_and_profile(client):
     )
     assert upload_response.status_code == 200
     uploaded = upload_response.json()
-    assert uploaded["status"] == "indexed"
-    assert uploaded["chunk_count"] >= 1
+    assert uploaded["status"] == "queued"
+    assert uploaded["processing_stage"] == "uploaded"
+
+    indexed_document = _document_from_course(client, course_id, uploaded["id"])
+    assert indexed_document["status"] == "indexed"
+    assert indexed_document["chunk_count"] >= 1
 
     ask_response = client.post(
         f"/api/courses/{course_id}/ask",
@@ -30,6 +40,8 @@ def test_upload_txt_then_ask_outline_and_profile(client):
     assert ask_response.status_code == 200
     answer = ask_response.json()
     assert answer["provider"] == "mock/offline"
+    assert answer["llm_provider"] == "mock/offline"
+    assert answer["retrieval_provider"]
     assert "虚函数" in answer["answer"]
     assert answer["sources"]
 
@@ -100,9 +112,11 @@ def test_upload_image_courseware_with_mock_vision(client):
 
     assert upload_response.status_code == 200
     uploaded = upload_response.json()
-    assert uploaded["status"] == "indexed"
+    assert uploaded["status"] == "queued"
     assert uploaded["file_type"] == "png"
-    assert uploaded["chunk_count"] >= 1
+    indexed_document = _document_from_course(client, course_id, uploaded["id"])
+    assert indexed_document["status"] == "indexed"
+    assert indexed_document["chunk_count"] >= 1
 
     ask_response = client.post(
         f"/api/courses/{course_id}/ask",
@@ -147,6 +161,8 @@ public:
     assert "虚函数与多态" in point_names
     assert payload["similar_exercises"]
     assert payload["error_diagnosis"]
+    assert "compile_result" in payload
+    assert "run_result" in payload
 
 
 def test_learning_report_pdf_export(client):

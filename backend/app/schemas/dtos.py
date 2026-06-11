@@ -62,3 +62,4 @@ class CppAnalysisRequest(BaseModel):
     problem_text: str = Field("", max_length=4000)
     code_text: str = Field("", max_length=12000)
     user_code: str = Field("", max_length=12000)
+    sample_input: str = Field("", max_length=4000)

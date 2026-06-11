@@ -17,6 +17,17 @@ def test_create_and_list_courses(client):
     assert any(course["id"] == created["id"] for course in list_response.json())
 
 
+def test_course_requires_login(client):
+    token = client.headers.pop("Authorization", None)
+    try:
+        response = client.get("/api/courses")
+    finally:
+        if token:
+            client.headers.update({"Authorization": token})
+
+    assert response.status_code == 401
+
+
 def test_reject_duplicate_course_name(client):
     payload = {"name": "重复课程", "description": ""}
 

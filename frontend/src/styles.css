@@ -629,6 +629,7 @@ textarea {
 
 .recent-course span,
 .weak-item span,
+.weak-item p,
 .recommendation-item span,
 .wrong-item span,
 .wrong-item small,
@@ -637,6 +638,11 @@ textarea {
 .mastery-row small {
   color: var(--text-sub);
   font-size: 12px;
+}
+
+.weak-item p {
+  margin: 6px 0 0;
+  line-height: 1.5;
 }
 
 .course-grid {
@@ -892,6 +898,20 @@ pre {
 
 .practice-select {
   width: 132px;
+}
+
+.provider-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.report-note {
+  max-width: 360px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .cpp-panel {

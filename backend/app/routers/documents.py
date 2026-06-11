@@ -33,6 +33,7 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 @router.post("")
 def upload_document(
     course_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -60,30 +61,16 @@ def upload_document(
         stored_filename=stored_filename,
         file_type=suffix.replace(".", ""),
         file_path=str(target),
-        status="processing",
+        status="queued",
+        processing_stage="uploaded",
+        processing_progress=0,
+        error_message="已上传，等待后台解析。",
     )
     db.add(document)
     db.commit()
     db.refresh(document)
 
-    try:
-        if suffix in IMAGE_SUFFIXES:
-            _index_image_document(db, course, document, learning_user_id(current_user))
-        else:
-            pages = parse_document(target)
-            chunks = split_pages_into_chunks(pages)
-            document.page_count = len(pages)
-            index_document_chunks(db, document, chunks)
-            _finalize_parse_status(document, suffix, bool(chunks), bool(pages))
-            sync_course_knowledge_points(db, course_id, document.id, learning_user_id(current_user))
-        db.commit()
-        db.refresh(document)
-    except Exception as exc:  # noqa: BLE001 - return parser errors to the UI.
-        document.status = "needs_vision" if suffix in IMAGE_SUFFIXES else "failed"
-        document.error_message = str(exc)
-        db.commit()
-        db.refresh(document)
-
+    background_tasks.add_task(_process_uploaded_document, document.id, learning_user_id(current_user))
     return _document_payload(document)
 
 
@@ -234,6 +221,8 @@ def ocr_document(
     )
     db.add(job)
     document.status = "ocr_queued"
+    document.processing_stage = "ocr_queued"
+    document.processing_progress = 0
     mode_label = OCR_MODE_LABELS.get(payload.mode, "快速索引")
     job.error_message = (
         f"[mode:{payload.mode}] {mode_label}任务已加入后台队列：从第 {payload.start_page} 页开始，"
@@ -292,6 +281,8 @@ def cancel_ocr_job(
     job.finished_at = datetime.utcnow()
     job.error_message = f"OCR 已停止，已保留 {job.processed_pages} 页识别结果。"
     document.status = "indexed" if document.chunk_count else "needs_ocr"
+    document.processing_stage = document.status
+    document.processing_progress = 100
     document.error_message = job.error_message
     db.commit()
     db.refresh(job)
@@ -318,6 +309,8 @@ def _run_ocr_job(job_id: int) -> None:
         mode = _ocr_mode_from_message(job.error_message)
         mode_label = OCR_MODE_LABELS.get(mode, "快速索引")
         document.status = "ocr_processing"
+        document.processing_stage = "ocr_processing"
+        document.processing_progress = 5
         document.error_message = (
             f"正在后台{mode_label}：从第 {job.start_page} 页开始，最多处理 {job.max_pages} 页。"
         )
@@ -338,6 +331,8 @@ def _run_ocr_job(job_id: int) -> None:
                 f"已完成 {job.processed_pages}/{job.max_pages} 页。"
             )
             document.status = "ocr_processing"
+            document.processing_stage = "ocr_processing"
+            document.processing_progress = min(95, round((job.processed_pages / max(1, job.max_pages)) * 100))
             document.error_message = job.error_message.replace(f"[mode:{mode}] ", "", 1)
             db.commit()
 
@@ -361,6 +356,8 @@ def _run_ocr_job(job_id: int) -> None:
                 f"共完成 {job.processed_pages}/{job.max_pages} 页。"
             )
             document.status = "ocr_processing"
+            document.processing_stage = "ocr_processing"
+            document.processing_progress = min(95, round((job.processed_pages / max(1, job.max_pages)) * 100))
             document.error_message = job.error_message.replace(f"[mode:{mode}] ", "", 1)
             db.commit()
 
@@ -377,6 +374,8 @@ def _run_ocr_job(job_id: int) -> None:
             db.refresh(job)
             if job.status == "cancelled":
                 document.status = "indexed" if document.chunk_count else "needs_ocr"
+                document.processing_stage = document.status
+                document.processing_progress = 100
                 document.error_message = f"OCR 已停止，已保留 {job.processed_pages} 页识别结果。"
                 job.error_message = document.error_message
                 db.commit()
@@ -404,12 +403,17 @@ def _run_ocr_job(job_id: int) -> None:
             job.finished_at = datetime.utcnow()
             if document.chunk_count:
                 document.status = "indexed"
+                document.processing_stage = "indexed"
+                document.processing_progress = 100
+                document.indexed_at = datetime.utcnow()
                 document.error_message = (
                     f"{mode_label}已处理第 {job.start_page} 页起的 {result.processed_pages} 页，"
                     f"新增 {len(chunks)} 个知识片段。"
                 )
             else:
                 document.status = "needs_ocr"
+                document.processing_stage = "needs_ocr"
+                document.processing_progress = 100
                 document.error_message = "OCR 没有识别到有效文字。请减少页数或检查模型是否支持图片输入。"
             job.error_message = document.error_message
             db.commit()
@@ -418,12 +422,91 @@ def _run_ocr_job(job_id: int) -> None:
             job.error_message = str(exc)
             job.finished_at = datetime.utcnow()
             document.status = "indexed" if document.chunk_count else "needs_ocr"
+            document.processing_stage = document.status
+            document.processing_progress = 100
             document.error_message = str(exc)
             db.commit()
 
 
+def _process_uploaded_document(document_id: int, user_id: str | None) -> None:
+    with SessionLocal() as db:
+        document = db.get(Document, document_id)
+        if document is None:
+            return
+        course = db.get(Course, document.course_id)
+        if course is None:
+            document.status = "failed"
+            document.processing_stage = "failed"
+            document.processing_progress = 100
+            document.error_message = "课程不存在，资料无法入库。"
+            db.commit()
+            return
+
+        suffix = f".{document.file_type.lower()}"
+        try:
+            if suffix in IMAGE_SUFFIXES:
+                _set_processing(db, document, "parsing", 20, "正在识别图片课件内容")
+                _index_image_document(db, course, document, user_id)
+                _finish_document_processing(document)
+                db.commit()
+                return
+
+            _set_processing(db, document, "parsing", 20, "正在解析文本")
+            pages = parse_document(Path(document.file_path))
+            document.page_count = len(pages)
+            db.commit()
+
+            _set_processing(db, document, "chunking", 45, "正在切分知识片段")
+            chunks = split_pages_into_chunks(pages)
+            if not chunks:
+                _finalize_parse_status(document, suffix, has_chunks=False, has_pages=bool(pages))
+                _finish_document_processing(document)
+                db.commit()
+                return
+
+            _set_processing(db, document, "indexing", 70, "正在写入向量库")
+            index_document_chunks(db, document, chunks)
+            db.commit()
+
+            _set_processing(db, document, "syncing_knowledge_points", 90, "正在同步知识点")
+            sync_course_knowledge_points(db, document.course_id, document.id, user_id)
+            _finalize_parse_status(document, suffix, has_chunks=True, has_pages=bool(pages))
+            _finish_document_processing(document)
+            db.commit()
+        except Exception as exc:  # noqa: BLE001 - background task should persist a user-readable error.
+            document.status = "needs_vision" if suffix in IMAGE_SUFFIXES else "failed"
+            document.processing_stage = document.status
+            document.processing_progress = 100
+            document.error_message = _friendly_error(exc)
+            db.commit()
+
+
+def _set_processing(db: Session, document: Document, stage: str, progress: int, message: str) -> None:
+    document.status = stage
+    document.processing_stage = stage
+    document.processing_progress = progress
+    document.error_message = message
+    db.commit()
+    db.refresh(document)
+
+
+def _finish_document_processing(document: Document) -> None:
+    document.processing_stage = document.status
+    document.processing_progress = 100
+    if document.status == "indexed":
+        document.indexed_at = datetime.utcnow()
+
+
+def _friendly_error(exc: Exception) -> str:
+    text = str(exc).strip()
+    if not text:
+        return "资料解析失败，请检查文件是否损坏或格式是否受支持。"
+    return text[:500]
+
+
 def _finalize_parse_status(document: Document, suffix: str, has_chunks: bool, has_pages: bool) -> None:
     if has_chunks:
+        document.status = "indexed"
         document.error_message = ""
     elif suffix == ".pdf" and has_pages:
         document.status = "needs_ocr"
@@ -438,6 +521,8 @@ def _finalize_parse_status(document: Document, suffix: str, has_chunks: bool, ha
 
 def _index_image_document(db: Session, course: Course, document: Document, user_id: str | None) -> None:
     document.status = "vision_processing"
+    document.processing_stage = "vision_processing"
+    document.processing_progress = 35
     text = describe_courseware_image(Path(document.file_path), course.name)
     pages = [(1, text)]
     chunks = split_pages_into_chunks(pages)
@@ -445,9 +530,14 @@ def _index_image_document(db: Session, course: Course, document: Document, user_
     index_document_chunks(db, document, chunks)
     if chunks:
         document.status = "indexed"
+        document.processing_stage = "indexed"
+        document.processing_progress = 100
+        document.indexed_at = datetime.utcnow()
         document.error_message = "图片课件已完成多模态识别并加入知识库。"
     else:
         document.status = "empty"
+        document.processing_stage = "empty"
+        document.processing_progress = 100
         document.error_message = "图片课件识别完成，但没有生成可检索文本。"
     sync_course_knowledge_points(db, course.id, document.id, user_id)
 
@@ -511,11 +601,14 @@ def _document_payload(document: Document) -> dict:
         "original_filename": document.original_filename,
         "file_type": document.file_type,
         "status": document.status,
+        "processing_stage": document.processing_stage,
+        "processing_progress": document.processing_progress,
         "page_count": document.page_count,
         "chunk_count": document.chunk_count,
         "error_message": document.error_message,
         "created_at": document.created_at,
         "updated_at": document.updated_at,
+        "indexed_at": document.indexed_at,
     }
 
 
