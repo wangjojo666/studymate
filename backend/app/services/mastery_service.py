@@ -10,6 +10,8 @@ from app.models.entities import KnowledgePoint, QuestionAttempt, UserKnowledgeSt
 
 
 INITIAL_MASTERY = 60.0
+# Older rows may still carry the pre-formula default before 60.0 was standardized.
+LEGACY_DEFAULT_MASTERY = 55.0
 
 ERROR_TYPE_LABELS = {
     "concept_confusion": "概念混淆",
@@ -69,8 +71,9 @@ def calculate_mastery(
                 recent_wrong_count += 1
         score += mastery_delta(attempt.difficulty, attempt.is_correct) * recency_weight(attempt.created_at)
 
-    if not attempts and status is not None and status.mastery_score != 55.0:
-        score = max(INITIAL_MASTERY, float(status.mastery_score))
+    if not attempts and status is not None:
+        if status.review_count > 0 or status.mastery_score != LEGACY_DEFAULT_MASTERY:
+            score = max(INITIAL_MASTERY, float(status.mastery_score))
 
     score = round(max(0.0, min(100.0, score)), 1)
     level, level_label = mastery_level(score)
@@ -140,6 +143,16 @@ def recency_weight(created_at: datetime | None) -> float:
 
 def classify_error_type(reason: str, question_text: str = "", answer_text: str = "") -> str:
     text = f"{reason} {question_text} {answer_text}".lower()
+    if any(word in text for word in ("公式", "定义", "定理")):
+        return "formula_error"
+    if any(word in text for word in ("步骤", "推导", "过程", "证明", "跳跃")):
+        return "procedure_gap"
+    if any(word in text for word in ("语法", "编译", "分号", "少分号")):
+        return "coding_syntax"
+    if any(word in text for word in ("粗心", "看错", "漏看")):
+        return "careless"
+    if any(word in text for word in ("概念", "混淆", "不清")):
+        return "concept_confusion"
     if any(word in text for word in ("公式", "定义", "定理", "formula")):
         return "formula_error"
     if any(word in text for word in ("步骤", "推导", "过程", "证明", "procedure")):
