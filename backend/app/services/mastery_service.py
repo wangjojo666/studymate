@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
@@ -143,26 +143,31 @@ def recency_weight(created_at: datetime | None) -> float:
 
 def classify_error_type(reason: str, question_text: str = "", answer_text: str = "") -> str:
     text = f"{reason} {question_text} {answer_text}".lower()
-    if any(word in text for word in ("公式", "定义", "定理")):
-        return "formula_error"
-    if any(word in text for word in ("步骤", "推导", "过程", "证明", "跳跃")):
-        return "procedure_gap"
-    if any(word in text for word in ("语法", "编译", "分号", "少分号")):
-        return "coding_syntax"
-    if any(word in text for word in ("粗心", "看错", "漏看")):
-        return "careless"
-    if any(word in text for word in ("概念", "混淆", "不清")):
-        return "concept_confusion"
-    if any(word in text for word in ("公式", "定义", "定理", "formula")):
-        return "formula_error"
-    if any(word in text for word in ("步骤", "推导", "过程", "证明", "procedure")):
-        return "procedure_gap"
-    if any(word in text for word in ("语法", "编译", "cout", "cin", "分号", "syntax", "compile")):
-        return "coding_syntax"
-    if any(word in text for word in ("粗心", "看错", "漏看", "careless")):
-        return "careless"
-    if any(word in text for word in ("概念", "混淆", "不清", "concept")):
-        return "concept_confusion"
+    keyword_groups = (
+        (
+            "formula_error",
+            ("公式", "定义", "定理", "formula", "definition", "theorem", "鍏紡", "瀹氫箟", "瀹氱悊"),
+        ),
+        (
+            "procedure_gap",
+            ("步骤", "推导", "过程", "证明", "跳跃", "procedure", "derive", "proof", "姝ラ", "鎺ㄥ", "杩囩▼", "璇佹槑", "璺宠穬"),
+        ),
+        (
+            "coding_syntax",
+            ("语法", "编译", "分号", "少分号", "syntax", "compile", "compiler", "cout", "cin", "璇硶", "缂栬瘧", "鍒嗗彿", "灏戝垎鍙?"),
+        ),
+        (
+            "careless",
+            ("粗心", "看错", "漏看", "careless", "绮楀績", "鐪嬮敊", "婕忕湅"),
+        ),
+        (
+            "concept_confusion",
+            ("概念", "混淆", "不清", "concept", "confusion", "姒傚康", "娣锋穯", "涓嶆竻"),
+        ),
+    )
+    for error_type, keywords in keyword_groups:
+        if any(keyword in text for keyword in keywords):
+            return error_type
     return "unknown"
 
 

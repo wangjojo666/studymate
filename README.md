@@ -383,3 +383,8 @@ studymate/
 本项目不是传统的课程资料问答 demo，而是面向大学生课程复习场景构建的学习诊断原型系统。系统在 RAG 文档问答的基础上，引入知识点抽取、错题归因、掌握度评估和基于规则的复习推荐，实现“资料上传—知识点建模—智能问答—练习测评—错因分析—复习规划”的可演示闭环。
 
 相比普通 PDF 问答系统，StudyMate 额外记录学生的学习行为和答题结果，生成轻量学习画像，识别薄弱知识点，并根据考试时间和掌握程度生成复习任务。文本生成、embedding 和扫描版 PDF OCR 已拆分配置，方便在无 API 的本地演示与真实模型演示之间切换。
+## 本地验收结果
+
+* python -m pytest backend/tests -q：passed
+* cd frontend && npm run build：passed
+* python scripts/smoke_test.py：passed
