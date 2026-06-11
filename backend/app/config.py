@@ -40,6 +40,8 @@ class Settings:
     database_url: str = _sqlite_url()
     storage_dir: Path = _path_from_env("STORAGE_DIR", BASE_DIR / "storage")
     upload_dir: Path = _path_from_env("UPLOAD_DIR", BASE_DIR / "storage" / "uploads")
+    chroma_dir: Path = _path_from_env("CHROMA_DIR", BASE_DIR / "storage" / "chroma")
+    embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "384"))
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",
@@ -72,6 +74,10 @@ class Settings:
     ocr_max_pages_per_request: int = int(os.getenv("OCR_MAX_PAGES_PER_REQUEST", "20"))
     document_upload_max_bytes: int = int(os.getenv("DOCUMENT_UPLOAD_MAX_BYTES", str(100 * 1024 * 1024)))
     txt_upload_max_bytes: int = int(os.getenv("TXT_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
+    auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", "studymate-dev-secret-change-me")
+    auth_token_expire_minutes: int = int(os.getenv("AUTH_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
+    demo_user_email: str = os.getenv("DEMO_USER_EMAIL", "demo@studymate.local")
+    demo_user_password: str = os.getenv("DEMO_USER_PASSWORD", "studymate-demo")
 
 
 settings = Settings()

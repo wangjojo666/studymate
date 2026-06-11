@@ -1,10 +1,21 @@
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  display_name VARCHAR(120) DEFAULT '',
+  password_hash TEXT NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL
+);
+
 CREATE TABLE courses (
   id INTEGER PRIMARY KEY,
-  name VARCHAR(120) NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  name VARCHAR(120) NOT NULL,
   description TEXT DEFAULT '',
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
-  last_asked_at DATETIME
+  last_asked_at DATETIME,
+  UNIQUE(user_id, name)
 );
 
 CREATE TABLE documents (
@@ -78,7 +89,7 @@ CREATE TABLE chunk_knowledge_points (
 
 CREATE TABLE user_knowledge_status (
   id INTEGER PRIMARY KEY,
-  user_id VARCHAR(80) NOT NULL DEFAULT 'demo-user',
+  user_id VARCHAR(80) NOT NULL,
   course_id INTEGER NOT NULL REFERENCES courses(id),
   knowledge_point_id INTEGER NOT NULL REFERENCES knowledge_points(id),
   mastery_score FLOAT NOT NULL DEFAULT 50,
@@ -91,7 +102,7 @@ CREATE TABLE user_knowledge_status (
 
 CREATE TABLE question_attempts (
   id INTEGER PRIMARY KEY,
-  user_id VARCHAR(80) NOT NULL DEFAULT 'demo-user',
+  user_id VARCHAR(80) NOT NULL,
   course_id INTEGER NOT NULL REFERENCES courses(id),
   knowledge_point_id INTEGER REFERENCES knowledge_points(id),
   question_text TEXT NOT NULL,
@@ -105,7 +116,7 @@ CREATE TABLE question_attempts (
 
 CREATE TABLE review_tasks (
   id INTEGER PRIMARY KEY,
-  user_id VARCHAR(80) NOT NULL DEFAULT 'demo-user',
+  user_id VARCHAR(80) NOT NULL,
   course_id INTEGER NOT NULL REFERENCES courses(id),
   knowledge_point_id INTEGER REFERENCES knowledge_points(id),
   task_type VARCHAR(40) NOT NULL DEFAULT 'review',

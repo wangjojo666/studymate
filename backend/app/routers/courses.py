@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.entities import (
     ChatMessage,
     ChunkKnowledgePoint,
@@ -17,17 +18,27 @@ from app.models.entities import (
     OcrJob,
     QuestionAttempt,
     ReviewTask,
+    User,
     UserKnowledgeStatus,
 )
 from app.schemas import CourseCreate
+from app.services.vector_store import delete_course_index
 
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 
 @router.get("")
-def list_courses(db: Session = Depends(get_db)) -> list[dict]:
-    rows = db.query(Course).order_by(Course.updated_at.desc()).all()
+def list_courses(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    rows = (
+        db.query(Course)
+        .filter(Course.user_id == current_user.id)
+        .order_by(Course.updated_at.desc())
+        .all()
+    )
     result: list[dict] = []
     for course in rows:
         document_count = db.query(func.count(Document.id)).filter(Document.course_id == course.id).scalar() or 0
@@ -37,11 +48,23 @@ def list_courses(db: Session = Depends(get_db)) -> list[dict]:
 
 
 @router.post("")
-def create_course(payload: CourseCreate, db: Session = Depends(get_db)) -> dict:
-    exists = db.query(Course).filter(Course.name == payload.name.strip()).first()
+def create_course(
+    payload: CourseCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    exists = (
+        db.query(Course)
+        .filter(Course.user_id == current_user.id, Course.name == payload.name.strip())
+        .first()
+    )
     if exists:
         raise HTTPException(status_code=409, detail="课程名称已存在")
-    course = Course(name=payload.name.strip(), description=payload.description.strip())
+    course = Course(
+        user_id=current_user.id,
+        name=payload.name.strip(),
+        description=payload.description.strip(),
+    )
     db.add(course)
     db.commit()
     db.refresh(course)
@@ -49,8 +72,16 @@ def create_course(payload: CourseCreate, db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/{course_id}")
-def get_course(course_id: int, db: Session = Depends(get_db)) -> dict:
-    course = db.get(Course, course_id)
+def get_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.user_id == current_user.id)
+        .first()
+    )
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
     documents = (
@@ -76,10 +107,19 @@ def get_course(course_id: int, db: Session = Depends(get_db)) -> dict:
 
 
 @router.delete("/{course_id}")
-def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict:
-    course = db.get(Course, course_id)
+def delete_course(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.user_id == current_user.id)
+        .first()
+    )
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
+    delete_course_index(course_id)
     _delete_course_dependents(db, course_id)
     db.delete(course)
     db.commit()
@@ -89,6 +129,7 @@ def delete_course(course_id: int, db: Session = Depends(get_db)) -> dict:
 def _course_payload(course: Course, document_count: int, chunk_count: int) -> dict:
     return {
         "id": course.id,
+        "user_id": course.user_id,
         "name": course.name,
         "description": course.description,
         "document_count": document_count,

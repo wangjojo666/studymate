@@ -5,6 +5,65 @@ const http = axios.create({
   timeout: 600000
 });
 
+const TOKEN_KEY = "studymate_access_token";
+const USER_KEY = "studymate_user";
+
+http.interceptors.request.use((config) => {
+  const token = getAuthToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+http.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      clearAuthSession();
+    }
+    return Promise.reject(error);
+  }
+);
+
+export function getAuthToken() {
+  return window.localStorage.getItem(TOKEN_KEY);
+}
+
+export function getStoredUser() {
+  const raw = window.localStorage.getItem(USER_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+
+export function setAuthSession(payload) {
+  window.localStorage.setItem(TOKEN_KEY, payload.access_token);
+  window.localStorage.setItem(USER_KEY, JSON.stringify(payload.user));
+}
+
+export function clearAuthSession() {
+  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(USER_KEY);
+}
+
+export async function login(payload) {
+  const { data } = await http.post("/auth/login", payload);
+  setAuthSession(data);
+  return data;
+}
+
+export async function register(payload) {
+  const { data } = await http.post("/auth/register", payload);
+  setAuthSession(data);
+  return data;
+}
+
+export async function getCurrentUser() {
+  const { data } = await http.get("/auth/me");
+  window.localStorage.setItem(USER_KEY, JSON.stringify(data));
+  return data;
+}
+
 export async function getCourses() {
   const { data } = await http.get("/courses");
   return data;
@@ -108,6 +167,9 @@ export async function updateReviewTask(courseId, taskId, status) {
   return data;
 }
 
-export function learningReportUrl(courseId) {
-  return `/api/courses/${courseId}/learning/report.pdf`;
+export async function downloadLearningReport(courseId) {
+  const { data } = await http.get(`/courses/${courseId}/learning/report.pdf`, {
+    responseType: "blob"
+  });
+  return data;
 }

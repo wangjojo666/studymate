@@ -139,6 +139,8 @@ textarea {
 .topbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   border-bottom: 1px solid rgba(219, 228, 238, 0.82);
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(18px);
@@ -157,6 +159,22 @@ textarea {
   margin-top: 3px;
   color: var(--text-sub);
   font-size: 13px;
+}
+
+.account-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-sub);
+  font-size: 13px;
+}
+
+.account-strip span {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .main-content {
@@ -188,7 +206,8 @@ textarea {
 .dashboard-hero,
 .library-hero,
 .course-hero,
-.diagnosis-hero {
+.diagnosis-hero,
+.report-hero {
   display: flex;
   align-items: stretch;
   justify-content: space-between;
@@ -209,7 +228,8 @@ textarea {
 
 .library-hero,
 .course-hero,
-.diagnosis-hero {
+.diagnosis-hero,
+.report-hero {
   align-items: flex-end;
   padding: 22px;
   border: 1px solid rgba(219, 228, 238, 0.9);
@@ -226,7 +246,8 @@ textarea {
 .dashboard-hero h1,
 .library-hero h1,
 .course-hero h1,
-.diagnosis-hero h1 {
+.diagnosis-hero h1,
+.report-hero h1 {
   margin: 12px 0 8px;
   font-size: 36px;
   line-height: 1.12;
@@ -235,7 +256,8 @@ textarea {
 .dashboard-hero p,
 .library-hero p,
 .course-hero p,
-.diagnosis-hero p {
+.diagnosis-hero p,
+.report-hero p {
   max-width: 720px;
   margin: 0;
   color: var(--text-sub);
@@ -243,11 +265,90 @@ textarea {
 }
 
 .hero-actions,
-.toolbar-actions {
+.toolbar-actions,
+.report-actions {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 22px;
+}
+
+.report-actions {
+  align-items: stretch;
+  min-width: min(420px, 100%);
+}
+
+.report-actions .el-select {
+  min-width: 220px;
+}
+
+.report-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.report-flow button {
+  display: grid;
+  gap: 8px;
+  min-height: 134px;
+  padding: 16px;
+  border: 1px solid rgba(219, 228, 238, 0.9);
+  border-radius: 8px;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.055);
+  cursor: pointer;
+  text-align: left;
+}
+
+.report-flow button:hover {
+  border-color: rgba(79, 70, 229, 0.42);
+}
+
+.report-flow .el-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: #ffffff;
+  background: var(--primary);
+  font-size: 18px;
+}
+
+.report-flow strong,
+.report-flow span {
+  display: block;
+}
+
+.report-flow span {
+  color: var(--text-sub);
+  font-size: 12px;
+}
+
+.report-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.75fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.report-section-list {
+  display: grid;
+  gap: 10px;
+}
+
+.report-section-list div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.report-section-list .el-icon {
+  color: var(--success);
 }
 
 .today-focus {
@@ -1137,7 +1238,8 @@ pre {
   .dashboard-grid,
   .diagnosis-top-grid,
   .diagnosis-grid,
-  .diagnosis-preview-grid {
+  .diagnosis-preview-grid,
+  .report-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1163,6 +1265,7 @@ pre {
   .dashboard-metrics,
   .diagnosis-metrics,
   .learning-cue-grid,
+  .report-flow,
   .login-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1170,7 +1273,8 @@ pre {
   .dashboard-hero,
   .library-hero,
   .course-hero,
-  .diagnosis-hero {
+  .diagnosis-hero,
+  .report-hero {
     flex-direction: column;
     min-width: 0;
   }
@@ -1188,6 +1292,7 @@ pre {
   .dashboard-metrics,
   .diagnosis-metrics,
   .learning-cue-grid,
+  .report-flow,
   .login-layout {
     grid-template-columns: 1fr;
   }
@@ -1200,7 +1305,8 @@ pre {
   .dashboard-hero h1,
   .library-hero h1,
   .course-hero h1,
-  .diagnosis-hero h1 {
+  .diagnosis-hero h1,
+  .report-hero h1 {
     font-size: 28px;
   }
 
@@ -1210,6 +1316,7 @@ pre {
 
   .toolbar-actions,
   .hero-actions,
+  .report-actions,
   .inline-actions {
     align-items: stretch;
     flex-direction: column;
@@ -1221,6 +1328,8 @@ pre {
   .toolbar-actions .el-button,
   .toolbar-actions .el-upload,
   .hero-actions .el-button,
+  .report-actions .el-button,
+  .report-actions .el-select,
   .inline-actions .el-button {
     width: 100%;
     max-width: 100%;

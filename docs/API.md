@@ -2,15 +2,61 @@
 
 Base URL: `http://127.0.0.1:8000/api`
 
+除 `/health`、`/auth/register`、`/auth/login` 外，其余接口都需要请求头：
+
+```http
+Authorization: Bearer <access_token>
+```
+
 ## Health
 
 `GET /health`
+
+## Auth
+
+`POST /auth/register`
+
+```json
+{
+  "email": "student@example.com",
+  "password": "secret123",
+  "display_name": "Sunny"
+}
+```
+
+`POST /auth/login`
+
+```json
+{
+  "email": "demo@studymate.local",
+  "password": "studymate-demo"
+}
+```
+
+登录和注册都会返回：
+
+```json
+{
+  "access_token": "jwt-like-token",
+  "token_type": "bearer",
+  "user": {
+    "id": 1,
+    "email": "demo@studymate.local",
+    "display_name": "Demo User"
+  }
+}
+```
+
+`GET /auth/me`
+
+返回当前登录用户信息。
 
 ## Courses
 
 `GET /courses`
 
 返回课程列表，包含资料数量、知识片段数量、最近提问时间。
+只返回当前登录用户自己的课程。
 
 `POST /courses`
 
@@ -27,7 +73,7 @@ Base URL: `http://127.0.0.1:8000/api`
 
 `DELETE /courses/{course_id}`
 
-删除课程及其资料记录、chunk 和生成内容。
+删除当前用户自己的课程及其资料记录、chunk、Chroma 索引和生成内容。
 
 ## Documents
 
@@ -122,6 +168,8 @@ Base URL: `http://127.0.0.1:8000/api`
 ```
 
 ## RAG Question Answering
+
+资料入库时会生成本地 embedding 并写入 Chroma 持久化 collection；如果环境没有安装 Chroma，后端会自动降级到 SQLite 稀疏向量检索，响应结构保持一致。
 
 `POST /courses/{course_id}/ask`
 

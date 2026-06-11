@@ -278,7 +278,7 @@ import {
   getKnowledgeGraph,
   getLearningProfile,
   getWrongAttempts,
-  learningReportUrl,
+  downloadLearningReport,
   submitPracticeAttempt,
   updateReviewTask
 } from "../api/client";
@@ -545,8 +545,18 @@ async function markTaskDone(task) {
   }
 }
 
-function downloadReport() {
-  window.open(learningReportUrl(props.id), "_blank", "noopener");
+async function downloadReport() {
+  try {
+    const blob = await downloadLearningReport(props.id);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `studymate-course-${props.id}-learning-report.pdf`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "报告导出失败，请检查后端服务是否启动"));
+  }
 }
 
 function resetAttemptForm() {

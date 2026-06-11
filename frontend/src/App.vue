@@ -36,9 +36,13 @@
           <el-icon><Calendar /></el-icon>
           <span>复习计划</span>
         </el-menu-item>
+        <el-menu-item index="/reports">
+          <el-icon><Document /></el-icon>
+          <span>报告亮点</span>
+        </el-menu-item>
         <el-menu-item index="/login">
           <el-icon><Setting /></el-icon>
-          <span>演示设置</span>
+          <span>账号</span>
         </el-menu-item>
       </el-menu>
 
@@ -54,6 +58,10 @@
           <strong>{{ pageTitle }}</strong>
           <span>{{ pageSubtitle }}</span>
         </div>
+        <div v-if="currentUser" class="account-strip">
+          <span>{{ currentUser.display_name || currentUser.email }}</span>
+          <el-button text @click="logout">退出</el-button>
+        </div>
       </el-header>
       <el-main class="main-content">
         <router-view />
@@ -63,11 +71,14 @@
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+
+import { clearAuthSession, getStoredUser } from "./api/client";
 
 const route = useRoute();
 const router = useRouter();
+const currentUser = ref(getStoredUser());
 
 const moduleTitleMap = {
   qa: "智能问答",
@@ -91,7 +102,8 @@ const activePath = computed(() => {
 
 const pageTitle = computed(() => {
   if (route.path === "/") return "学习首页";
-  if (route.path === "/login") return "演示设置";
+  if (route.path === "/login") return "账号登录";
+  if (route.path === "/reports") return "学习报告导出";
   if (route.path.endsWith("/diagnosis")) return "AI 学习画像中心";
   if (route.path.startsWith("/courses/")) return "课程工作台";
   if (route.query.module) return moduleTitleMap[route.query.module] || "课程知识库";
@@ -100,6 +112,8 @@ const pageTitle = computed(() => {
 
 const pageSubtitle = computed(() => {
   if (route.path === "/") return "今天应该复习什么，一屏看清楚";
+  if (route.path === "/login") return "真实用户登录后按账号隔离课程和学习数据";
+  if (route.path === "/reports") return "上传资料、提问、做题、导出 PDF 报告";
   if (route.path.endsWith("/diagnosis")) return "掌握度、错题归因、知识图谱和复习计划";
   if (route.path.startsWith("/courses/")) return "资料库、AI 问答、提纲和专项练习";
   if (route.query.module) return "选择一门课程进入对应学习模块";
@@ -109,4 +123,17 @@ const pageSubtitle = computed(() => {
 function handleSelect(index) {
   router.push(index);
 }
+
+function logout() {
+  clearAuthSession();
+  currentUser.value = null;
+  router.replace("/login");
+}
+
+watch(
+  () => route.fullPath,
+  () => {
+    currentUser.value = getStoredUser();
+  }
+);
 </script>

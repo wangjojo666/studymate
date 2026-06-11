@@ -40,7 +40,7 @@ def test_upload_txt_then_ask_outline_and_profile(client):
     profile_response = client.get(f"/api/courses/{course_id}/learning/profile")
     assert profile_response.status_code == 200
     profile = profile_response.json()
-    assert profile["user_id"] == "demo-user"
+    assert profile["user_id"].isdigit()
     assert profile["summary"]["knowledge_point_count"] >= 1
 
 

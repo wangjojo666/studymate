@@ -2,20 +2,29 @@
   <section class="login-layout">
     <div class="login-panel">
       <div class="section-heading">
-        <span>Single-user Demo</span>
+        <span>Account</span>
         <h1>StudyMate</h1>
-        <p>当前版本为单用户本地演示版，学习画像、错题和复习任务默认绑定 demo-user。</p>
+        <p>登录后课程、资料、错题、复习任务和学习报告都会绑定到当前账号。</p>
       </div>
+
+      <el-tabs v-model="mode" class="login-tabs">
+        <el-tab-pane label="登录" name="login" />
+        <el-tab-pane label="注册" name="register" />
+      </el-tabs>
+
       <el-form label-position="top" @submit.prevent>
-        <el-form-item label="账号">
-          <el-input v-model="username" size="large" placeholder="demo-user" />
+        <el-form-item v-if="mode === 'register'" label="昵称">
+          <el-input v-model="form.display_name" size="large" placeholder="例如：Sunny" />
+        </el-form-item>
+        <el-form-item label="账号邮箱">
+          <el-input v-model="form.email" size="large" placeholder="demo@studymate.local" />
         </el-form-item>
         <el-form-item label="密码">
-          <el-input v-model="password" size="large" placeholder="任意输入" show-password />
+          <el-input v-model="form.password" size="large" placeholder="studymate-demo" show-password />
         </el-form-item>
-        <el-button type="primary" size="large" @click="enter">
+        <el-button type="primary" size="large" :loading="submitting" @click="submit">
           <el-icon><Right /></el-icon>
-          进入课程
+          {{ mode === "login" ? "登录" : "注册并登录" }}
         </el-button>
       </el-form>
     </div>
@@ -25,20 +34,51 @@
         <div></div>
         <div></div>
       </div>
-      <div class="quote-line">上传资料 → 解析切分 → 检索增强 → 来源可追溯</div>
+      <div class="quote-line">上传资料 -> 提问 -> 做题 -> 出报告</div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { ref } from "vue";
-import { useRouter } from "vue-router";
+import { reactive, ref } from "vue";
+import { ElMessage } from "element-plus";
+import { useRoute, useRouter } from "vue-router";
 
+import { login, register } from "../api/client";
+import { getApiErrorMessage } from "../api/errors";
+
+const route = useRoute();
 const router = useRouter();
-const username = ref("demo-user");
-const password = ref("");
+const mode = ref("login");
+const submitting = ref(false);
+const form = reactive({
+  display_name: "",
+  email: "demo@studymate.local",
+  password: "studymate-demo"
+});
 
-function enter() {
-  router.push("/courses");
+async function submit() {
+  if (!form.email.trim() || !form.password) {
+    ElMessage.warning("请填写账号和密码");
+    return;
+  }
+  submitting.value = true;
+  try {
+    if (mode.value === "login") {
+      await login({ email: form.email.trim(), password: form.password });
+    } else {
+      await register({
+        email: form.email.trim(),
+        password: form.password,
+        display_name: form.display_name.trim()
+      });
+    }
+    ElMessage.success("已登录");
+    router.replace(route.query.redirect || "/");
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, mode.value === "login" ? "登录失败" : "注册失败"));
+  } finally {
+    submitting.value = false;
+  }
 }
 </script>

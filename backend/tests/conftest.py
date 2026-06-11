@@ -28,4 +28,11 @@ def client(tmp_path, monkeypatch):
     from app.main import app
 
     with TestClient(app) as test_client:
+        login_response = test_client.post(
+            "/api/auth/login",
+            json={"email": "demo@studymate.local", "password": "studymate-demo"},
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+        test_client.headers.update({"Authorization": f"Bearer {token}"})
         yield test_client

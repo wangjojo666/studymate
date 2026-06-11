@@ -9,13 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal, get_db
-from app.models.entities import ChunkKnowledgePoint, Course, Document, DocumentChunk, KnowledgePoint, OcrJob
+from app.dependencies import get_current_user, learning_user_id
+from app.models.entities import ChunkKnowledgePoint, Course, Document, DocumentChunk, KnowledgePoint, OcrJob, User
 from app.schemas import OcrRequest
 from app.services.chunker import split_pages_into_chunks
 from app.services.document_parser import parse_document
 from app.services.learning_service import sync_course_knowledge_points
 from app.services.ocr_service import ocr_pdf_with_qwen_vl
-from app.services.vector_store import index_document_chunks
+from app.services.vector_store import delete_chunks_from_index, delete_document_index, index_document_chunks
 from app.services.vision_service import IMAGE_SUFFIXES, describe_courseware_image
 
 
@@ -34,8 +35,9 @@ def upload_document(
     course_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    course = db.get(Course, course_id)
+    course = _get_owned_course(db, course_id, current_user.id)
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
     if not file.filename:
@@ -66,14 +68,14 @@ def upload_document(
 
     try:
         if suffix in IMAGE_SUFFIXES:
-            _index_image_document(db, course, document)
+            _index_image_document(db, course, document, learning_user_id(current_user))
         else:
             pages = parse_document(target)
             chunks = split_pages_into_chunks(pages)
             document.page_count = len(pages)
             index_document_chunks(db, document, chunks)
             _finalize_parse_status(document, suffix, bool(chunks), bool(pages))
-            sync_course_knowledge_points(db, course_id, document.id)
+            sync_course_knowledge_points(db, course_id, document.id, learning_user_id(current_user))
         db.commit()
         db.refresh(document)
     except Exception as exc:  # noqa: BLE001 - return parser errors to the UI.
@@ -86,8 +88,12 @@ def upload_document(
 
 
 @router.get("")
-def list_documents(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
-    course = db.get(Course, course_id)
+def list_documents(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    course = _get_owned_course(db, course_id, current_user.id)
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
     documents = (
@@ -100,8 +106,13 @@ def list_documents(course_id: int, db: Session = Depends(get_db)) -> list[dict]:
 
 
 @router.delete("/{document_id}")
-def delete_document(course_id: int, document_id: int, db: Session = Depends(get_db)) -> dict:
-    course = db.get(Course, course_id)
+def delete_document(
+    course_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    course = _get_owned_course(db, course_id, current_user.id)
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
     document = db.get(Document, document_id)
@@ -114,9 +125,12 @@ def delete_document(course_id: int, document_id: int, db: Session = Depends(get_
         for row in db.query(DocumentChunk.id).filter(DocumentChunk.document_id == document_id).all()
     ]
     if chunk_ids:
+        delete_chunks_from_index(chunk_ids)
         db.query(ChunkKnowledgePoint).filter(ChunkKnowledgePoint.chunk_id.in_(chunk_ids)).delete(
             synchronize_session=False
         )
+    else:
+        delete_document_index(document_id)
     db.query(OcrJob).filter(OcrJob.document_id == document_id).delete(synchronize_session=False)
     db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete(
         synchronize_session=False
@@ -146,8 +160,13 @@ def delete_document(course_id: int, document_id: int, db: Session = Depends(get_
 
 
 @router.post("/{document_id}/vision")
-def index_image_document(course_id: int, document_id: int, db: Session = Depends(get_db)) -> dict:
-    course = db.get(Course, course_id)
+def index_image_document(
+    course_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    course = _get_owned_course(db, course_id, current_user.id)
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
     document = db.get(Document, document_id)
@@ -160,7 +179,7 @@ def index_image_document(course_id: int, document_id: int, db: Session = Depends
     document.error_message = "正在识别图片课件内容。"
     db.commit()
     try:
-        _index_image_document(db, course, document)
+        _index_image_document(db, course, document, learning_user_id(current_user))
         db.commit()
         db.refresh(document)
     except Exception as exc:  # noqa: BLE001 - surface vision failure to the UI.
@@ -178,8 +197,9 @@ def ocr_document(
     payload: OcrRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    course = db.get(Course, course_id)
+    course = _get_owned_course(db, course_id, current_user.id)
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
     document = db.get(Document, document_id)
@@ -231,7 +251,15 @@ def ocr_document(
 
 
 @router.get("/{document_id}/ocr-jobs/{job_id}")
-def get_ocr_job(course_id: int, document_id: int, job_id: int, db: Session = Depends(get_db)) -> dict:
+def get_ocr_job(
+    course_id: int,
+    document_id: int,
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if _get_owned_course(db, course_id, current_user.id) is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
     job = db.get(OcrJob, job_id)
     if job is None or job.course_id != course_id or job.document_id != document_id:
         raise HTTPException(status_code=404, detail="OCR 任务不存在")
@@ -242,7 +270,15 @@ def get_ocr_job(course_id: int, document_id: int, job_id: int, db: Session = Dep
 
 
 @router.post("/{document_id}/ocr-jobs/{job_id}/cancel")
-def cancel_ocr_job(course_id: int, document_id: int, job_id: int, db: Session = Depends(get_db)) -> dict:
+def cancel_ocr_job(
+    course_id: int,
+    document_id: int,
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if _get_owned_course(db, course_id, current_user.id) is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
     job = db.get(OcrJob, job_id)
     if job is None or job.course_id != course_id or job.document_id != document_id:
         raise HTTPException(status_code=404, detail="OCR 任务不存在")
@@ -354,7 +390,13 @@ def _run_ocr_job(job_id: int) -> None:
                 replace_document=False,
                 replace_page_numbers=[page_number for page_number, _text in result.pages],
             )
-            sync_course_knowledge_points(db, document.course_id, document.id)
+            course = db.get(Course, document.course_id)
+            sync_course_knowledge_points(
+                db,
+                document.course_id,
+                document.id,
+                str(course.user_id) if course else None,
+            )
             job.status = "completed"
             job.total_pages = result.total_pages
             job.processed_pages = result.processed_pages
@@ -394,7 +436,7 @@ def _finalize_parse_status(document: Document, suffix: str, has_chunks: bool, ha
         document.error_message = "未从文件中解析到可检索文本。"
 
 
-def _index_image_document(db: Session, course: Course, document: Document) -> None:
+def _index_image_document(db: Session, course: Course, document: Document, user_id: str | None) -> None:
     document.status = "vision_processing"
     text = describe_courseware_image(Path(document.file_path), course.name)
     pages = [(1, text)]
@@ -407,7 +449,15 @@ def _index_image_document(db: Session, course: Course, document: Document) -> No
     else:
         document.status = "empty"
         document.error_message = "图片课件识别完成，但没有生成可检索文本。"
-    sync_course_knowledge_points(db, course.id, document.id)
+    sync_course_knowledge_points(db, course.id, document.id, user_id)
+
+
+def _get_owned_course(db: Session, course_id: int, user_id: int) -> Course | None:
+    return (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.user_id == user_id)
+        .first()
+    )
 
 
 def _safe_filename(filename: str) -> str:

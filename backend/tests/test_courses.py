@@ -24,3 +24,33 @@ def test_reject_duplicate_course_name(client):
     duplicate_response = client.post("/api/courses", json=payload)
 
     assert duplicate_response.status_code == 409
+
+
+def test_courses_are_scoped_to_logged_in_user(client):
+    create_response = client.post(
+        "/api/courses",
+        json={"name": "用户一课程", "description": "只能被当前用户看到"},
+    )
+    assert create_response.status_code == 200
+
+    register_response = client.post(
+        "/api/auth/register",
+        json={
+            "email": "second@example.com",
+            "password": "second-password",
+            "display_name": "Second",
+        },
+    )
+    assert register_response.status_code == 200
+    second_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
+
+    second_list = client.get("/api/courses", headers=second_headers)
+    assert second_list.status_code == 200
+    assert all(course["name"] != "用户一课程" for course in second_list.json())
+
+    second_create = client.post(
+        "/api/courses",
+        json={"name": "用户一课程", "description": "同名但属于另一个用户"},
+        headers=second_headers,
+    )
+    assert second_create.status_code == 200

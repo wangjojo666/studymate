@@ -10,6 +10,17 @@ class CourseCreate(BaseModel):
     description: str = ""
 
 
+class RegisterRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=6, max_length=128)
+    display_name: str = Field("", max_length=120)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000)
     top_k: int = Field(5, ge=1, le=12)

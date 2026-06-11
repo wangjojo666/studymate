@@ -12,7 +12,7 @@ from app.services.learning_service import get_learning_profile, get_wrong_attemp
 from app.services.llm_service import call_llm
 
 
-def generate_learning_report_pdf(db: Session, course_id: int) -> bytes:
+def generate_learning_report_pdf(db: Session, course_id: int, user_id: str | None = None) -> bytes:
     try:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
@@ -22,7 +22,7 @@ def generate_learning_report_pdf(db: Session, course_id: int) -> bytes:
         from reportlab.pdfbase.cidfonts import UnicodeCIDFont
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     except ImportError as exc:
-        raise RuntimeError("缺少 reportlab，无法生成 PDF 学习报告。请安装 requirements.txt。") from exc
+        return _generate_simple_report_pdf(db, course_id, user_id)
 
     course = db.get(Course, course_id)
     if course is None:
@@ -30,8 +30,8 @@ def generate_learning_report_pdf(db: Session, course_id: int) -> bytes:
 
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     font_name = "STSong-Light"
-    profile = get_learning_profile(db, course_id)
-    wrong_attempts = get_wrong_attempts(db, course_id, limit=50)
+    profile = get_learning_profile(db, course_id, user_id)
+    wrong_attempts = get_wrong_attempts(db, course_id, limit=50, user_id=user_id)
     advice = _ai_advice(course.name, profile, wrong_attempts)
 
     buffer = BytesIO()
@@ -247,3 +247,92 @@ def _date_text(value: object) -> str:
 def _paragraph(value: object) -> str:
     text = "" if value is None else str(value)
     return escape(text).replace("\n", "<br/>")
+
+
+def _generate_simple_report_pdf(db: Session, course_id: int, user_id: str | None) -> bytes:
+    course = db.get(Course, course_id)
+    if course is None:
+        raise ValueError("课程不存在")
+
+    profile = get_learning_profile(db, course_id, user_id)
+    wrong_attempts = get_wrong_attempts(db, course_id, limit=20, user_id=user_id)
+    summary = profile.get("summary", {})
+    lines = [
+        f"StudyMate Learning Report - {course.name}",
+        f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        "Overview",
+        f"Study actions: {summary.get('study_actions', 0)}",
+        f"Overall mastery: {summary.get('overall_mastery', 0)}%",
+        f"Practice accuracy: {summary.get('practice_accuracy', 0)}%",
+        f"Knowledge points: {summary.get('knowledge_point_count', 0)}",
+        f"Chunks: {summary.get('chunk_count', 0)}",
+        "",
+        "Weak Points",
+    ]
+    for index, point in enumerate(profile.get("weak_points", [])[:5], start=1):
+        lines.append(
+            f"{index}. {point.get('name', '')} - {point.get('mastery_score', 0)}%, wrong {point.get('wrong_count', 0)}"
+        )
+    if not profile.get("weak_points"):
+        lines.append("No weak points yet.")
+
+    lines.extend(["", "Wrong Reasons"])
+    reason_counts = Counter(item.get("error_reason") or "unlabeled" for item in wrong_attempts)
+    if reason_counts:
+        for reason, count in reason_counts.most_common(6):
+            lines.append(f"{reason}: {count}")
+    else:
+        lines.append("No wrong attempts yet.")
+
+    lines.extend(["", "Review Plan"])
+    for item in profile.get("recommendations", [])[:5]:
+        lines.append(f"- {item.get('title', '')}: {item.get('action', '')}")
+    lines.extend(["", "AI Advice", _ai_advice(course.name, profile, wrong_attempts)])
+    return _build_minimal_pdf(lines)
+
+
+def _build_minimal_pdf(lines: list[str]) -> bytes:
+    escaped_lines = [_pdf_escape(_ascii_line(line)[:110]) for line in lines[:44]]
+    commands = ["BT", "/F1 12 Tf", "50 790 Td", "16 TL"]
+    for line in escaped_lines:
+        commands.append(f"({line}) Tj")
+        commands.append("T*")
+    commands.append("ET")
+    stream = "\n".join(commands).encode("latin-1", errors="replace")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode("ascii"))
+        pdf.extend(obj)
+        pdf.extend(b"\nendobj\n")
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(pdf)
+
+
+def _ascii_line(value: object) -> str:
+    return str(value).encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _pdf_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")

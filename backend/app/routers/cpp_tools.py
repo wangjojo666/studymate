@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.entities import Course
+from app.dependencies import get_current_user
+from app.models.entities import Course, User
 from app.schemas import CppAnalysisRequest
 from app.services.cpp_service import analyze_cpp_code
 
@@ -13,8 +14,17 @@ router = APIRouter(prefix="/courses/{course_id}/cpp", tags=["cpp"])
 
 
 @router.post("/analyze")
-def analyze_cpp(course_id: int, payload: CppAnalysisRequest, db: Session = Depends(get_db)) -> dict:
-    course = db.get(Course, course_id)
+def analyze_cpp(
+    course_id: int,
+    payload: CppAnalysisRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.user_id == current_user.id)
+        .first()
+    )
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
     if not payload.problem_text.strip() and not payload.code_text.strip() and not payload.user_code.strip():

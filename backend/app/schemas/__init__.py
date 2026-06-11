@@ -3,8 +3,10 @@ from app.schemas.dtos import (
     AttemptCreate,
     CourseCreate,
     CppAnalysisRequest,
+    LoginRequest,
     OcrRequest,
     PracticeRequest,
+    RegisterRequest,
     ReviewPlanRequest,
     ReviewTaskUpdate,
 )
@@ -14,8 +16,10 @@ __all__ = [
     "AttemptCreate",
     "CourseCreate",
     "CppAnalysisRequest",
+    "LoginRequest",
     "OcrRequest",
     "PracticeRequest",
+    "RegisterRequest",
     "ReviewPlanRequest",
     "ReviewTaskUpdate",
 ]

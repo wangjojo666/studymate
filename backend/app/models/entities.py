@@ -12,16 +12,32 @@ def utcnow() -> datetime:
     return datetime.utcnow()
 
 
-class Course(Base):
-    __tablename__ = "courses"
+class User(Base):
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(120), default="")
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    courses: Mapped[list["Course"]] = relationship(back_populates="user")
+
+
+class Course(Base):
+    __tablename__ = "courses"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_course_user_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     last_asked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    user: Mapped[User] = relationship(back_populates="courses")
     documents: Mapped[list["Document"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
@@ -130,7 +146,7 @@ class UserKnowledgeStatus(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[str] = mapped_column(String(80), index=True, default="demo-user")
+    user_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
     knowledge_point_id: Mapped[int] = mapped_column(
         ForeignKey("knowledge_points.id"), index=True, nullable=False
@@ -148,7 +164,7 @@ class QuestionAttempt(Base):
     __tablename__ = "question_attempts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[str] = mapped_column(String(80), index=True, default="demo-user")
+    user_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
     knowledge_point_id: Mapped[int | None] = mapped_column(
         ForeignKey("knowledge_points.id"), index=True, nullable=True
@@ -166,7 +182,7 @@ class ReviewTask(Base):
     __tablename__ = "review_tasks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[str] = mapped_column(String(80), index=True, default="demo-user")
+    user_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
     knowledge_point_id: Mapped[int | None] = mapped_column(
         ForeignKey("knowledge_points.id"), index=True, nullable=True

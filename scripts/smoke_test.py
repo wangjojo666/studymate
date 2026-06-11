@@ -10,9 +10,11 @@ import uuid
 
 
 BASE_URL = os.getenv("STUDYMATE_API_BASE_URL", "http://127.0.0.1:8000/api").rstrip("/")
+AUTH_TOKEN = ""
 
 
 def main() -> int:
+    global AUTH_TOKEN
     suffix = uuid.uuid4().hex[:8]
     course_name = f"Smoke Test {suffix}"
     course_id = None
@@ -25,6 +27,17 @@ def main() -> int:
     try:
         health = request_json("GET", "/health")
         print_step("health", health.get("status") == "ok", health)
+
+        auth = request_json(
+            "POST",
+            "/auth/login",
+            {
+                "email": os.getenv("STUDYMATE_DEMO_EMAIL", "demo@studymate.local"),
+                "password": os.getenv("STUDYMATE_DEMO_PASSWORD", "studymate-demo"),
+            },
+        )
+        AUTH_TOKEN = auth["access_token"]
+        print_step("login", bool(AUTH_TOKEN), {"user": auth.get("user")})
 
         course = request_json("POST", "/courses", {"name": course_name, "description": "smoke test"})
         course_id = course["id"]
@@ -44,7 +57,7 @@ def main() -> int:
         print_step("outline", bool(outline.get("content")), {"provider": outline.get("provider")})
 
         profile = request_json("GET", f"/courses/{course_id}/learning/profile")
-        print_step("profile", profile.get("user_id") == "demo-user", profile.get("summary"))
+        print_step("profile", str(profile.get("user_id", "")).isdigit(), profile.get("summary"))
     except Exception as exc:  # noqa: BLE001 - smoke test should print actionable failure.
         print(f"[FAIL] {exc}")
         return 1
@@ -61,6 +74,8 @@ def main() -> int:
 def request_json(method: str, path: str, payload: dict | None = None) -> dict:
     data = None
     headers = {}
+    if AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -81,7 +96,10 @@ def upload_txt(course_id: int, filename: str, content: str) -> dict:
     request = urllib.request.Request(
         f"{BASE_URL}/courses/{course_id}/documents",
         data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers={
+            "Authorization": f"Bearer {AUTH_TOKEN}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
         method="POST",
     )
     try:

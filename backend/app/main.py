@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_database
-from app.routers import assistant, courses, cpp_tools, documents, learning
+from app.routers import assistant, auth, courses, cpp_tools, documents, learning
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -23,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(courses.router, prefix=settings.api_prefix)
+app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(documents.router, prefix=settings.api_prefix)
 app.include_router(assistant.router, prefix=settings.api_prefix)
 app.include_router(learning.router, prefix=settings.api_prefix)

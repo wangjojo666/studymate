@@ -82,8 +82,9 @@ def generate_practice(
     count: int,
     difficulty: str = "basic",
     knowledge_point_id: int | None = None,
+    user_id: str | None = None,
 ) -> dict:
-    sync_course_knowledge_points(db, course_id)
+    sync_course_knowledge_points(db, course_id, user_id=user_id)
     focus_point = _get_focus_point(db, course_id, knowledge_point_id)
     focus_name = focus_point.name if focus_point else ""
     difficulty_label = DIFFICULTY_LABELS.get(difficulty, "基础题")

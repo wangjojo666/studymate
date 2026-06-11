@@ -143,7 +143,13 @@ CONCEPT_MARKERS = (
 LLM_EXTRACTION_CHUNK_LIMIT = 12
 
 
-def sync_course_knowledge_points(db: Session, course_id: int, document_id: int | None = None) -> None:
+def sync_course_knowledge_points(
+    db: Session,
+    course_id: int,
+    document_id: int | None = None,
+    user_id: str | None = None,
+) -> None:
+    user_id = _resolve_user_id(db, course_id, user_id)
     course = db.get(Course, course_id)
     if course is None:
         return
@@ -175,25 +181,26 @@ def sync_course_knowledge_points(db: Session, course_id: int, document_id: int |
                     evidence=item["evidence"] or chunk.content[:240],
                 )
                 _link_chunk_to_point(db, course_id, chunk.id, point.id)
-                _ensure_status(db, course_id, point.id)
+                _ensure_status(db, course_id, point.id, user_id)
     elif db.query(KnowledgePoint).filter(KnowledgePoint.course_id == course_id).count() == 0:
-        _seed_course_knowledge_points(db, course)
+        _seed_course_knowledge_points(db, course, user_id)
 
-    _ensure_all_statuses(db, course_id)
+    _ensure_all_statuses(db, course_id, user_id)
     db.flush()
 
 
-def get_learning_profile(db: Session, course_id: int) -> dict:
-    sync_course_knowledge_points(db, course_id)
-    points = _knowledge_status_payloads(db, course_id)
+def get_learning_profile(db: Session, course_id: int, user_id: str | None = None) -> dict:
+    user_id = _resolve_user_id(db, course_id, user_id)
+    sync_course_knowledge_points(db, course_id, user_id=user_id)
+    points = _knowledge_status_payloads(db, course_id, user_id)
     weak_points = sorted(points, key=lambda item: (item["mastery_score"], -item["wrong_count"]))[:5]
     attempts_count = db.query(func.count(QuestionAttempt.id)).filter(
         QuestionAttempt.course_id == course_id,
-        QuestionAttempt.user_id == DEMO_USER_ID,
+        QuestionAttempt.user_id == user_id,
     ).scalar() or 0
     correct_count = db.query(func.count(QuestionAttempt.id)).filter(
         QuestionAttempt.course_id == course_id,
-        QuestionAttempt.user_id == DEMO_USER_ID,
+        QuestionAttempt.user_id == user_id,
         QuestionAttempt.is_correct.is_(True),
     ).scalar() or 0
     question_count = db.query(func.count(ChatMessage.id)).filter(ChatMessage.course_id == course_id).scalar() or 0
@@ -206,10 +213,11 @@ def get_learning_profile(db: Session, course_id: int) -> dict:
     pending_tasks = _review_task_payloads(
         db,
         course_id,
+        user_id,
         status_filter=("pending", "planned"),
         limit=8,
     )
-    recent_attempts = _attempt_payloads(db, course_id, only_wrong=False, limit=6)
+    recent_attempts = _attempt_payloads(db, course_id, user_id, only_wrong=False, limit=6)
     recent_questions = _recent_question_payloads(db, course_id, limit=3)
 
     overall_mastery = (
@@ -218,7 +226,7 @@ def get_learning_profile(db: Session, course_id: int) -> dict:
     accuracy = round((correct_count / attempts_count) * 100, 1) if attempts_count else 0.0
 
     return {
-        "user_id": DEMO_USER_ID,
+        "user_id": user_id,
         "summary": {
             "study_actions": question_count + generated_count + attempts_count,
             "question_count": question_count,
@@ -238,9 +246,10 @@ def get_learning_profile(db: Session, course_id: int) -> dict:
     }
 
 
-def get_knowledge_graph(db: Session, course_id: int) -> dict:
-    sync_course_knowledge_points(db, course_id)
-    nodes = _knowledge_status_payloads(db, course_id)
+def get_knowledge_graph(db: Session, course_id: int, user_id: str | None = None) -> dict:
+    user_id = _resolve_user_id(db, course_id, user_id)
+    sync_course_knowledge_points(db, course_id, user_id=user_id)
+    nodes = _knowledge_status_payloads(db, course_id, user_id)
     node_ids = {node["id"] for node in nodes}
     edges: set[tuple[int, int, str]] = set()
 
@@ -271,18 +280,30 @@ def get_knowledge_graph(db: Session, course_id: int) -> dict:
     }
 
 
-def get_wrong_attempts(db: Session, course_id: int, limit: int = 20) -> list[dict]:
-    return _attempt_payloads(db, course_id, only_wrong=True, limit=limit)
+def get_wrong_attempts(
+    db: Session,
+    course_id: int,
+    limit: int = 20,
+    user_id: str | None = None,
+) -> list[dict]:
+    user_id = _resolve_user_id(db, course_id, user_id)
+    return _attempt_payloads(db, course_id, user_id, only_wrong=True, limit=limit)
 
 
-def record_question_attempt(db: Session, course_id: int, payload: AttemptCreate) -> dict:
-    sync_course_knowledge_points(db, course_id)
-    point = _resolve_attempt_point(db, course_id, payload.knowledge_point_id)
+def record_question_attempt(
+    db: Session,
+    course_id: int,
+    payload: AttemptCreate,
+    user_id: str | None = None,
+) -> dict:
+    user_id = _resolve_user_id(db, course_id, user_id)
+    sync_course_knowledge_points(db, course_id, user_id=user_id)
+    point = _resolve_attempt_point(db, course_id, payload.knowledge_point_id, user_id)
     error_reason = payload.error_reason.strip() or _infer_error_reason(payload)
     correct_answer = payload.correct_answer.strip() or (payload.user_answer.strip() if payload.is_correct else "")
 
     attempt = QuestionAttempt(
-        user_id=DEMO_USER_ID,
+        user_id=user_id,
         course_id=course_id,
         knowledge_point_id=point.id if point else None,
         question_text=payload.question_text.strip(),
@@ -296,14 +317,14 @@ def record_question_attempt(db: Session, course_id: int, payload: AttemptCreate)
 
     status_payload = None
     if point:
-        status = _ensure_status(db, course_id, point.id)
+        status = _ensure_status(db, course_id, point.id, user_id)
         delta = _mastery_delta(payload.difficulty, payload.is_correct)
         status.mastery_score = max(0.0, min(100.0, status.mastery_score + delta))
         status.review_count += 1
         status.last_review_time = datetime.utcnow()
         if not payload.is_correct:
             status.wrong_count += 1
-            _create_wrong_task(db, course_id, point, error_reason, payload.difficulty)
+            _create_wrong_task(db, course_id, point, error_reason, payload.difficulty, user_id)
         db.flush()
         status_payload = _status_payload(point, status)
 
@@ -317,11 +338,17 @@ def record_question_attempt(db: Session, course_id: int, payload: AttemptCreate)
     }
 
 
-def create_review_plan(db: Session, course_id: int, payload: ReviewPlanRequest) -> dict:
-    sync_course_knowledge_points(db, course_id)
+def create_review_plan(
+    db: Session,
+    course_id: int,
+    payload: ReviewPlanRequest,
+    user_id: str | None = None,
+) -> dict:
+    user_id = _resolve_user_id(db, course_id, user_id)
+    sync_course_knowledge_points(db, course_id, user_id=user_id)
     today = date.today()
     days_left = max(1, (payload.exam_date - today).days)
-    points = _select_plan_points(db, course_id, payload.goals)
+    points = _select_plan_points(db, course_id, payload.goals, user_id)
     if not points:
         return {"exam_date": payload.exam_date.isoformat(), "days_left": days_left, "tasks": []}
 
@@ -338,6 +365,7 @@ def create_review_plan(db: Session, course_id: int, payload: ReviewPlanRequest) 
         task = _get_or_create_review_task(
             db,
             course_id=course_id,
+            user_id=user_id,
             point_id=point["id"],
             title=title,
             description=description,
@@ -360,13 +388,20 @@ def create_review_plan(db: Session, course_id: int, payload: ReviewPlanRequest) 
     }
 
 
-def update_review_task_status(db: Session, course_id: int, task_id: int, status: str) -> dict | None:
+def update_review_task_status(
+    db: Session,
+    course_id: int,
+    task_id: int,
+    status: str,
+    user_id: str | None = None,
+) -> dict | None:
+    user_id = _resolve_user_id(db, course_id, user_id)
     task = db.get(ReviewTask, task_id)
-    if task is None or task.course_id != course_id or task.user_id != DEMO_USER_ID:
+    if task is None or task.course_id != course_id or task.user_id != user_id:
         return None
     task.status = status
     if status == "done" and task.knowledge_point_id:
-        knowledge_status = _ensure_status(db, course_id, task.knowledge_point_id)
+        knowledge_status = _ensure_status(db, course_id, task.knowledge_point_id, user_id)
         knowledge_status.mastery_score = min(100.0, knowledge_status.mastery_score + 6)
         knowledge_status.review_count += 1
         knowledge_status.last_review_time = datetime.utcnow()
@@ -378,7 +413,7 @@ def update_review_task_status(db: Session, course_id: int, task_id: int, status:
     return _review_task_payload(task, point_name)
 
 
-def _seed_course_knowledge_points(db: Session, course: Course) -> None:
+def _seed_course_knowledge_points(db: Session, course: Course, user_id: str) -> None:
     for name in _default_seed_names(course.name):
         point = _get_or_create_knowledge_point(
             db,
@@ -389,7 +424,7 @@ def _seed_course_knowledge_points(db: Session, course: Course) -> None:
             source_page=0,
             evidence="暂无资料片段，系统按课程名称生成初始学习画像。",
         )
-        _ensure_status(db, course.id, point.id)
+        _ensure_status(db, course.id, point.id, user_id)
 
 
 def _default_seed_names(course_name: str) -> list[str]:
@@ -598,17 +633,26 @@ def _link_chunk_to_point(db: Session, course_id: int, chunk_id: int, point_id: i
     )
 
 
-def _ensure_all_statuses(db: Session, course_id: int) -> None:
+def _resolve_user_id(db: Session, course_id: int, user_id: str | None) -> str:
+    if user_id:
+        return str(user_id)
+    course = db.get(Course, course_id)
+    if course is not None and course.user_id:
+        return str(course.user_id)
+    return DEMO_USER_ID
+
+
+def _ensure_all_statuses(db: Session, course_id: int, user_id: str) -> None:
     point_ids = [row[0] for row in db.query(KnowledgePoint.id).filter(KnowledgePoint.course_id == course_id).all()]
     for point_id in point_ids:
-        _ensure_status(db, course_id, point_id)
+        _ensure_status(db, course_id, point_id, user_id)
 
 
-def _ensure_status(db: Session, course_id: int, point_id: int) -> UserKnowledgeStatus:
+def _ensure_status(db: Session, course_id: int, point_id: int, user_id: str) -> UserKnowledgeStatus:
     status = (
         db.query(UserKnowledgeStatus)
         .filter(
-            UserKnowledgeStatus.user_id == DEMO_USER_ID,
+            UserKnowledgeStatus.user_id == user_id,
             UserKnowledgeStatus.course_id == course_id,
             UserKnowledgeStatus.knowledge_point_id == point_id,
         )
@@ -617,7 +661,7 @@ def _ensure_status(db: Session, course_id: int, point_id: int) -> UserKnowledgeS
     if status:
         return status
     status = UserKnowledgeStatus(
-        user_id=DEMO_USER_ID,
+        user_id=user_id,
         course_id=course_id,
         knowledge_point_id=point_id,
         mastery_score=55.0,
@@ -627,7 +671,7 @@ def _ensure_status(db: Session, course_id: int, point_id: int) -> UserKnowledgeS
     return status
 
 
-def _knowledge_status_payloads(db: Session, course_id: int) -> list[dict]:
+def _knowledge_status_payloads(db: Session, course_id: int, user_id: str) -> list[dict]:
     rows = (
         db.query(KnowledgePoint, UserKnowledgeStatus)
         .join(
@@ -636,7 +680,7 @@ def _knowledge_status_payloads(db: Session, course_id: int) -> list[dict]:
         )
         .filter(
             KnowledgePoint.course_id == course_id,
-            UserKnowledgeStatus.user_id == DEMO_USER_ID,
+            UserKnowledgeStatus.user_id == user_id,
         )
         .order_by(KnowledgePoint.id.asc())
         .all()
@@ -697,13 +741,13 @@ def _recommendations_from_weak_points(weak_points: list[dict]) -> list[dict]:
 
 
 def _resolve_attempt_point(
-    db: Session, course_id: int, knowledge_point_id: int | None
+    db: Session, course_id: int, knowledge_point_id: int | None, user_id: str
 ) -> KnowledgePoint | None:
     if knowledge_point_id:
         point = db.get(KnowledgePoint, knowledge_point_id)
         if point and point.course_id == course_id:
             return point
-    weak_points = _knowledge_status_payloads(db, course_id)
+    weak_points = _knowledge_status_payloads(db, course_id, user_id)
     if not weak_points:
         return None
     weakest_id = sorted(weak_points, key=lambda item: (item["mastery_score"], -item["wrong_count"]))[0]["id"]
@@ -735,6 +779,7 @@ def _create_wrong_task(
     point: KnowledgePoint,
     error_reason: str,
     difficulty: str,
+    user_id: str,
 ) -> None:
     deadline = datetime.utcnow() + timedelta(days=1)
     title = f"错题复盘：{point.name}"
@@ -744,7 +789,7 @@ def _create_wrong_task(
     )
     db.add(
         ReviewTask(
-            user_id=DEMO_USER_ID,
+            user_id=user_id,
             course_id=course_id,
             knowledge_point_id=point.id,
             task_type="wrong_question",
@@ -782,8 +827,8 @@ def _next_training_suggestion(
     }
 
 
-def _select_plan_points(db: Session, course_id: int, goals: str) -> list[dict]:
-    points = _knowledge_status_payloads(db, course_id)
+def _select_plan_points(db: Session, course_id: int, goals: str, user_id: str) -> list[dict]:
+    points = _knowledge_status_payloads(db, course_id, user_id)
     goal_terms = [term.lower() for term in re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z0-9_+]+", goals)]
     if goal_terms:
         matched = [
@@ -808,6 +853,7 @@ def _plan_description(point: dict, difficulty: str, daily_minutes: int) -> str:
 def _get_or_create_review_task(
     db: Session,
     course_id: int,
+    user_id: str,
     point_id: int,
     title: str,
     description: str,
@@ -820,7 +866,7 @@ def _get_or_create_review_task(
     task = (
         db.query(ReviewTask)
         .filter(
-            ReviewTask.user_id == DEMO_USER_ID,
+            ReviewTask.user_id == user_id,
             ReviewTask.course_id == course_id,
             ReviewTask.knowledge_point_id == point_id,
             ReviewTask.title == title,
@@ -835,7 +881,7 @@ def _get_or_create_review_task(
         task.priority = priority
         return task
     task = ReviewTask(
-        user_id=DEMO_USER_ID,
+        user_id=user_id,
         course_id=course_id,
         knowledge_point_id=point_id,
         task_type=task_type,
@@ -853,12 +899,13 @@ def _get_or_create_review_task(
 def _attempt_payloads(
     db: Session,
     course_id: int,
+    user_id: str,
     only_wrong: bool,
     limit: int,
 ) -> list[dict]:
     query = db.query(QuestionAttempt).filter(
         QuestionAttempt.course_id == course_id,
-        QuestionAttempt.user_id == DEMO_USER_ID,
+        QuestionAttempt.user_id == user_id,
     )
     if only_wrong:
         query = query.filter(QuestionAttempt.is_correct.is_(False))
@@ -910,6 +957,7 @@ def _attempt_payload(db: Session, attempt: QuestionAttempt) -> dict:
 def _review_task_payloads(
     db: Session,
     course_id: int,
+    user_id: str,
     status_filter: tuple[str, ...],
     limit: int,
 ) -> list[dict]:
@@ -917,7 +965,7 @@ def _review_task_payloads(
         db.query(ReviewTask)
         .filter(
             ReviewTask.course_id == course_id,
-            ReviewTask.user_id == DEMO_USER_ID,
+            ReviewTask.user_id == user_id,
             ReviewTask.status.in_(status_filter),
         )
         .order_by(ReviewTask.priority.desc(), ReviewTask.deadline.asc().nullslast(), ReviewTask.created_at.desc())
