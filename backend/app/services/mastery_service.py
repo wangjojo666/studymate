@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
@@ -146,23 +146,23 @@ def classify_error_type(reason: str, question_text: str = "", answer_text: str =
     keyword_groups = (
         (
             "formula_error",
-            ("公式", "定义", "定理", "formula", "definition", "theorem", "鍏紡", "瀹氫箟", "瀹氱悊"),
+            ("公式", "定义", "定理", "formula", "definition", "theorem"),
         ),
         (
             "procedure_gap",
-            ("步骤", "推导", "过程", "证明", "跳跃", "procedure", "derive", "proof", "姝ラ", "鎺ㄥ", "杩囩▼", "璇佹槑", "璺宠穬"),
+            ("步骤", "推导", "过程", "证明", "跳跃", "procedure", "derive", "derivation", "proof", "step"),
         ),
         (
             "coding_syntax",
-            ("语法", "编译", "分号", "少分号", "syntax", "compile", "compiler", "cout", "cin", "璇硶", "缂栬瘧", "鍒嗗彿", "灏戝垎鍙?"),
+            ("语法", "编译", "分号", "少分号", "syntax", "compile", "compiler", "cout", "cin", "semicolon"),
         ),
         (
             "careless",
-            ("粗心", "看错", "漏看", "careless", "绮楀績", "鐪嬮敊", "婕忕湅"),
+            ("粗心", "看错", "漏看", "careless", "mistake", "misread"),
         ),
         (
             "concept_confusion",
-            ("概念", "混淆", "不清", "concept", "confusion", "姒傚康", "娣锋穯", "涓嶆竻"),
+            ("概念", "混淆", "不清", "concept", "confusion", "unclear"),
         ),
     )
     for error_type, keywords in keyword_groups:
