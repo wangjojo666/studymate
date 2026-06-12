@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.entities import ChatMessage, Course, Document, GeneratedMaterial, KnowledgePoint
+from app.config import settings
+from app.models.entities import ChatMessage, Course, Document, DocumentChunk, GeneratedMaterial, KnowledgePoint
 from app.services.learning_service import DIFFICULTY_LABELS, sync_course_knowledge_points
 from app.services.llm_service import call_llm, offline_answer, offline_outline, offline_practice
 from app.services.vector_store import (
@@ -17,20 +19,34 @@ from app.services.vector_store import (
 
 
 OFFLINE_PROVIDER = "mock/offline"
+LOW_CONFIDENCE_MESSAGE = "资料中没有找到足够依据回答这个问题，请补充资料或换一个更贴近资料的问题。"
 
 
 def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) -> dict:
-    # 问答流程：检索课程片段 -> 组装上下文 -> 调用模型；检索不到时明确说明依据不足。
-    sources = search_course(db, course_id, question, top_k)
+    # 问答流程：检索课程片段 -> 判断证据强度 -> 组装受限上下文 -> 调用模型。
+    # 严格来源模式下，证据不足时直接拒答，避免生成“像真的”但无依据的答案。
+    effective_top_k = max(1, min(int(top_k or settings.rag_top_k), max(1, settings.rag_top_k)))
+    sources = search_course(db, course_id, question, effective_top_k)
     retrieval_provider = retrieval_provider_from_results(sources)
+    top_score = sources[0].score if sources else 0.0
+    answer_status = "answered"
     context = _build_context(sources)
-    if sources:
+    if not sources:
+        answer_status = _knowledge_base_status(db, course_id)
+        answer = _empty_knowledge_base_message(db, course_id) if answer_status != "low_confidence" else LOW_CONFIDENCE_MESSAGE
+        llm_provider = "system"
+    elif settings.rag_enable_strict_source_mode and top_score < settings.rag_min_score:
+        answer_status = "low_confidence"
+        answer = LOW_CONFIDENCE_MESSAGE
+        llm_provider = "system"
+    else:
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "你是 StudyMate 课程资料问答助手。只能基于用户上传的课程资料回答；"
-                    "如果资料依据不足，要明确说明。回答要结构清晰，并提示用户查看来源。"
+                    "你是 StudyMate 课程资料问答助手。只能基于用户上传资料片段回答，"
+                    "不能引入片段之外的知识、猜测或常识补全。资料不足时必须明确说明不足。"
+                    "回答要结构清晰，并提醒用户查看下方来源片段复核。"
                 ),
             },
             {
@@ -41,17 +57,24 @@ def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) 
         llm_response = call_llm(messages)
         answer = llm_response.content if llm_response else offline_answer(question, context)
         llm_provider = llm_response.used_provider if llm_response else OFFLINE_PROVIDER
-    else:
-        answer = _empty_knowledge_base_message(db, course_id)
-        llm_provider = "system"
+    confidence = _confidence_from_score(top_score, answer_status)
     source_payload = _sources_payload(sources)
+    source_count = len(source_payload)
+    sources_record = _chat_sources_record(
+        source_payload,
+        answer_status=answer_status,
+        confidence=confidence,
+        source_count=source_count,
+        retrieval_provider=retrieval_provider,
+        llm_provider=llm_provider,
+    )
 
     db.add(
         ChatMessage(
             course_id=course_id,
             question=question,
             answer=answer,
-            sources_json=json.dumps(source_payload, ensure_ascii=False),
+            sources_json=json.dumps(sources_record, ensure_ascii=False),
         )
     )
     course = db.get(Course, course_id)
@@ -60,6 +83,9 @@ def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) 
     db.commit()
     return {
         "answer": answer,
+        "answer_status": answer_status,
+        "confidence": confidence,
+        "source_count": source_count,
         "sources": source_payload,
         "provider": llm_provider,
         "llm_provider": llm_provider,
@@ -156,10 +182,22 @@ def _save_material(
 
 def _build_context(sources: list[SearchResult]) -> str:
     parts: list[str] = []
+    max_chars = max(500, settings.rag_context_max_chars)
+    used_chars = 0
     for index, source in enumerate(sources, start=1):
-        parts.append(
-            f"[{index}] 文件：{source.document_name}，页码：P{source.page_number}\n{source.content}"
+        header = (
+            f"[{index}] 文件：{source.document_name}，页码：P{source.page_number}，"
+            f"chunk_index：{source.chunk_index}，score：{source.score:.4f}\n"
         )
+        remaining = max_chars - used_chars - len(header)
+        if remaining <= 0:
+            break
+        content = source.content.strip()
+        if len(content) > remaining:
+            content = f"{content[: max(0, remaining - 12)].rstrip()}\n[片段已截断]"
+        block = f"{header}{content}"
+        parts.append(block)
+        used_chars += len(block) + 2
     return "\n\n".join(parts)
 
 
@@ -185,6 +223,50 @@ def _sources_payload(sources: list[SearchResult]) -> list[dict]:
     return payload
 
 
+def _chat_sources_record(
+    sources: list[dict],
+    answer_status: str,
+    confidence: str,
+    source_count: int,
+    retrieval_provider: str,
+    llm_provider: str,
+) -> dict:
+    return {
+        "sources": sources,
+        "answer_status": answer_status,
+        "confidence": confidence,
+        "source_count": source_count,
+        "retrieval_provider": retrieval_provider,
+        "llm_provider": llm_provider,
+    }
+
+
+def _confidence_from_score(score: float, answer_status: str) -> str:
+    if answer_status != "answered":
+        return "low"
+    if score >= 0.55:
+        return "high"
+    if score >= settings.rag_min_score:
+        return "medium"
+    return "low"
+
+
+def _knowledge_base_status(db: Session, course_id: int) -> str:
+    chunk_count = db.query(func.count(DocumentChunk.id)).filter(DocumentChunk.course_id == course_id).scalar() or 0
+    if chunk_count:
+        return "low_confidence"
+
+    documents = db.query(Document).filter(Document.course_id == course_id).all()
+    if not documents:
+        return "empty_knowledge_base"
+    if any(document.status == "needs_ocr" for document in documents):
+        return "needs_ocr"
+    processing_statuses = {"uploaded", "queued", "parsing", "chunking", "indexing", "syncing_knowledge_points"}
+    if any(document.status in processing_statuses for document in documents):
+        return "processing"
+    return "empty_knowledge_base"
+
+
 def _empty_knowledge_base_message(db: Session, course_id: int) -> str:
     documents = db.query(Document).filter(Document.course_id == course_id).all()
     if not documents:
@@ -199,7 +281,7 @@ def _empty_knowledge_base_message(db: Session, course_id: int) -> str:
         return "资料正在后台解析入库，请稍后刷新状态，等资料显示为已入库后再提问。"
     if any(document.status == "failed" for document in documents):
         return "资料解析失败，请查看资料卡片上的错误提示，处理后重新上传。"
-    return "资料中没有找到足够依据回答这个问题。请换一个更贴近资料内容的问题，或补充上传相关课程资料。"
+    return LOW_CONFIDENCE_MESSAGE
 
 
 def _get_focus_point(db: Session, course_id: int, knowledge_point_id: int | None) -> KnowledgePoint | None:

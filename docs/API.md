@@ -185,11 +185,17 @@ Authorization: Bearer <access_token>
 ```json
 {
   "answer": "根据课程资料，第三章重点包括……",
+  "answer_status": "answered",
+  "confidence": "medium",
+  "source_count": 1,
   "provider": "mock/offline",
+  "llm_provider": "mock/offline",
+  "retrieval_provider": "sqlite_sparse",
   "sources": [
     {
       "document_name": "C++ 第三章.pdf",
       "page": 12,
+      "chunk_index": 3,
       "score": 0.62,
       "preview": "第三章主要介绍类与对象……"
     }
@@ -197,7 +203,15 @@ Authorization: Bearer <access_token>
 }
 ```
 
-`provider` 会返回后端实际使用的链路，例如 `mock/offline`、`deepseek/deepseek-v4-flash` 或 `ollama/qwen3-vl:30b`。
+`answer_status` 可能是：
+
+- `answered`: 已基于资料回答。
+- `low_confidence`: 检索分数不足，已拒答。
+- `empty_knowledge_base`: 当前课程没有可检索知识库。
+- `processing`: 资料仍在解析入库。
+- `needs_ocr`: 资料需要 OCR 后才能检索。
+
+`provider` / `llm_provider` 会返回后端实际使用的链路，例如 `mock/offline`、`deepseek/deepseek-v4-flash` 或 `ollama/qwen3-vl:30b`。当低置信拒答时，`llm_provider` 为 `system`，表示没有调用 LLM。
 
 ## Review Outline
 
@@ -244,6 +258,15 @@ Authorization: Bearer <access_token>
 {
   "summary": "用户代码主要涉及 继承与派生、虚函数与多态；规则检查发现 1 个需要关注的问题。",
   "provider": "rule/offline",
+  "sandbox_level": "disabled",
+  "compile_result": {
+    "executed": false,
+    "success": false,
+    "stderr": "当前处于安全演示模式，未执行本地编译运行。"
+  },
+  "run_result": {
+    "executed": false
+  },
   "exam_points": [
     {
       "name": "虚函数与多态",
@@ -254,6 +277,8 @@ Authorization: Bearer <access_token>
   "error_diagnosis": []
 }
 ```
+
+默认 `CPP_RUN_ENABLED=false`，只做规则分析，不执行本地编译运行。如果改为 `true`，`sandbox_level` 会变为 `local_tempdir_timeout_only`，表示仅有临时目录和超时限制，不是完整沙箱。
 
 ## Learning Diagnosis
 
@@ -277,6 +302,11 @@ Authorization: Bearer <access_token>
       "name": "格林公式",
       "mastery_score": 42,
       "wrong_count": 2,
+      "mastery_formula": "初始掌握度为 60 分；答对会按难度加分……",
+      "recent_attempts_summary": "2026-06-12 答错，难度 exam，基础变化 -15，权重 1.2，概念混淆",
+      "next_action": "先回看资料 P45 中的证据片段……",
+      "evidence": "格林公式要求正向闭合曲线……",
+      "source_document_id": 2,
       "source_page": 45,
       "state": "weak"
     }

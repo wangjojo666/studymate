@@ -159,13 +159,53 @@ def _document_payload(document: Document) -> dict:
 
 
 def _chat_message_payload(message: ChatMessage) -> dict:
+    source_record = _parse_chat_sources(message.sources_json)
     return {
         "id": message.id,
         "course_id": message.course_id,
         "question": message.question,
         "answer": message.answer,
-        "sources": json.loads(message.sources_json or "[]"),
+        "sources": source_record["sources"],
+        "answer_status": source_record["answer_status"],
+        "confidence": source_record["confidence"],
+        "source_count": source_record["source_count"],
+        "retrieval_provider": source_record["retrieval_provider"],
+        "llm_provider": source_record["llm_provider"],
         "created_at": message.created_at,
+    }
+
+
+def _parse_chat_sources(raw_json: str) -> dict:
+    try:
+        raw = json.loads(raw_json or "[]")
+    except json.JSONDecodeError:
+        raw = []
+    if isinstance(raw, list):
+        return {
+            "sources": raw,
+            "answer_status": "answered" if raw else "empty_knowledge_base",
+            "confidence": "medium" if raw else "low",
+            "source_count": len(raw),
+            "retrieval_provider": "",
+            "llm_provider": "",
+        }
+    if isinstance(raw, dict):
+        sources = raw.get("sources") or []
+        return {
+            "sources": sources if isinstance(sources, list) else [],
+            "answer_status": raw.get("answer_status") or ("answered" if sources else "empty_knowledge_base"),
+            "confidence": raw.get("confidence") or ("medium" if sources else "low"),
+            "source_count": int(raw.get("source_count") or len(sources)),
+            "retrieval_provider": raw.get("retrieval_provider") or "",
+            "llm_provider": raw.get("llm_provider") or "",
+        }
+    return {
+        "sources": [],
+        "answer_status": "empty_knowledge_base",
+        "confidence": "low",
+        "source_count": 0,
+        "retrieval_provider": "",
+        "llm_provider": "",
     }
 
 

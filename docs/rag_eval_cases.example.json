@@ -1,0 +1,14 @@
+[
+  {
+    "course_id": 1,
+    "question": "虚函数为什么能支持运行时多态？",
+    "expected_keywords": ["虚函数", "多态"],
+    "expected_source_hint": "virtual"
+  },
+  {
+    "course_id": 1,
+    "question": "资料里对构造函数的初始化顺序有什么说明？",
+    "expected_keywords": ["构造"],
+    "expected_source_hint": "构造"
+  }
+]

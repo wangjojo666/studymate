@@ -25,6 +25,11 @@ def unauthenticated_client(tmp_path, monkeypatch):
     monkeypatch.setenv("OCR_LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBEDDING_PROVIDER", "hash")
     monkeypatch.setenv("EMBEDDING_DIMENSION", "384")
+    monkeypatch.setenv("RAG_TOP_K", "5")
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.12")
+    monkeypatch.setenv("RAG_CONTEXT_MAX_CHARS", "6000")
+    monkeypatch.setenv("RAG_ENABLE_STRICT_SOURCE_MODE", "true")
+    monkeypatch.setenv("CPP_RUN_ENABLED", "false")
     monkeypatch.setenv("APP_ENV", "development")
 
     for module_name in list(sys.modules):

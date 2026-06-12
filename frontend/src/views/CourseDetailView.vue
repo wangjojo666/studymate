@@ -113,6 +113,8 @@
               <span>回答基于已入库课程片段，并展示来源页码</span>
             </div>
             <div class="provider-tags">
+              <el-tag :type="answerStatusType(lastAnswerStatus)">状态：{{ answerStatusText(lastAnswerStatus) }}</el-tag>
+              <el-tag :type="confidenceTagType(lastConfidence)">置信度：{{ confidenceText(lastConfidence) }}</el-tag>
               <el-tag type="info">检索：{{ lastRetrievalProvider }}</el-tag>
               <el-tag>模型：{{ lastLlmProvider }}</el-tag>
             </div>
@@ -124,11 +126,22 @@
             </div>
             <div v-for="message in messages" :key="message.id" class="message-pair">
               <div class="question">{{ message.question }}</div>
-              <div class="answer">
+              <div class="answer" :class="{ 'answer-warning': message.answer_status === 'low_confidence' }">
+                <div class="answer-meta">
+                  <el-tag size="small" :type="answerStatusType(message.answer_status)">
+                    {{ answerStatusText(message.answer_status) }}
+                  </el-tag>
+                  <el-tag size="small" :type="confidenceTagType(message.confidence)" effect="plain">
+                    置信度：{{ confidenceText(message.confidence) }}
+                  </el-tag>
+                  <el-tag size="small" type="info" effect="plain">
+                    来源 {{ message.source_count ?? message.sources?.length ?? 0 }}
+                  </el-tag>
+                </div>
                 <pre>{{ message.answer }}</pre>
                 <div v-if="message.sources?.length" class="source-strip">
                   <button v-for="source in message.sources" :key="sourceKey(source)">
-                    《{{ source.document_name }}》P{{ source.page }}
+                    《{{ source.document_name }}》P{{ source.page }} · score {{ formatScore(source.score) }}
                   </button>
                 </div>
               </div>
@@ -145,6 +158,7 @@
               <el-icon><Promotion /></el-icon>
               提问
             </el-button>
+            <small v-if="hasProcessingDocuments" class="ask-hint">资料入库后效果更好</small>
           </div>
         </div>
       </el-tab-pane>
@@ -285,17 +299,30 @@
               <template v-else>
                 <div class="cpp-summary">
                   <strong>{{ cppAnalysis.summary }}</strong>
-                  <el-tag>{{ cppAnalysis.provider }}</el-tag>
+                  <div class="cpp-summary-tags">
+                    <el-tag :type="cppAnalysis.sandbox_level === 'disabled' ? 'warning' : 'success'">
+                      {{ sandboxText(cppAnalysis.sandbox_level) }}
+                    </el-tag>
+                    <el-tag>{{ cppAnalysis.provider }}</el-tag>
+                  </div>
                 </div>
                 <div class="cpp-section">
                   <h3>编译诊断</h3>
+                  <el-alert
+                    v-if="cppAnalysis.sandbox_level === 'disabled'"
+                    title="当前处于安全演示模式，未执行本地编译运行。"
+                    type="warning"
+                    show-icon
+                    :closable="false"
+                    class="cpp-safe-alert"
+                  />
                   <div class="cpp-issue-list">
                     <div class="cpp-issue">
-                      <el-tag :type="cppAnalysis.compile_result?.success ? 'success' : 'danger'">
-                        {{ cppAnalysis.compile_result?.success ? "编译成功" : "编译未通过" }}
+                      <el-tag :type="compileTagType(cppAnalysis)">
+                        {{ compileStatusText(cppAnalysis) }}
                       </el-tag>
                       <div>
-                        <strong>{{ cppAnalysis.compile_result?.command || "g++ main.cpp -std=c++17" }}</strong>
+                        <strong>{{ compileCommandText(cppAnalysis) }}</strong>
                         <span>{{ cppAnalysis.compile_result?.stderr || "无编译错误输出" }}</span>
                       </div>
                     </div>
@@ -306,6 +333,13 @@
                       <div>
                         <strong>样例运行输出</strong>
                         <span>{{ cppAnalysis.run_result?.stdout || cppAnalysis.run_result?.stderr || "程序无输出" }}</span>
+                      </div>
+                    </div>
+                    <div v-else class="cpp-issue">
+                      <el-tag type="info">未运行</el-tag>
+                      <div>
+                        <strong>样例运行</strong>
+                        <span>{{ cppAnalysis.sandbox_level === 'disabled' ? "安全模式下未执行" : "未提供样例输入或编译未通过" }}</span>
                       </div>
                     </div>
                   </div>
@@ -377,6 +411,8 @@
                 <div>
                   <strong>{{ point.name }}</strong>
                   <span>{{ point.mastery_score }}% · {{ point.level_label }} · 错题 {{ point.wrong_count }} 次</span>
+                  <p>{{ point.mastery_formula || point.explanation }}</p>
+                  <small>来源：{{ point.source_page ? `P${point.source_page}` : "暂无页码" }} · {{ point.evidence || "暂无证据片段" }}</small>
                 </div>
               </div>
             </div>
@@ -430,6 +466,8 @@ const practiceDifficulty = ref("basic");
 const practiceKnowledgePointId = ref(null);
 const lastLlmProvider = ref("未调用");
 const lastRetrievalProvider = ref("未调用");
+const lastAnswerStatus = ref("未调用");
+const lastConfidence = ref("low");
 const ocrRunningId = ref(null);
 const visionRunningId = ref(null);
 const ocrJobs = ref({});
@@ -446,6 +484,9 @@ const cppForm = reactive({
 
 const knowledgePointOptions = computed(() => learningProfile.value?.knowledge_points || []);
 const diagnosisWeakPoints = computed(() => (learningProfile.value?.weak_points || []).slice(0, 5));
+const hasProcessingDocuments = computed(() =>
+  (course.value?.documents || []).some((document) => isDocumentProcessing(document))
+);
 const ringStyle = computed(() => {
   const score = learningProfile.value?.summary.overall_mastery || 0;
   const deg = Math.min(360, Math.max(0, score * 3.6));
@@ -484,8 +525,18 @@ async function loadCourse() {
         id: message.id,
         question: message.question,
         answer: message.answer,
+        answer_status: message.answer_status || "answered",
+        confidence: message.confidence || "medium",
+        source_count: message.source_count ?? message.sources?.length ?? 0,
         sources: message.sources || []
       }));
+    const latestMessage = messages.value[messages.value.length - 1];
+    if (latestMessage) {
+      lastAnswerStatus.value = latestMessage.answer_status || "answered";
+      lastConfidence.value = latestMessage.confidence || "medium";
+      lastRetrievalProvider.value = courseData.recent_messages?.[0]?.retrieval_provider || lastRetrievalProvider.value;
+      lastLlmProvider.value = courseData.recent_messages?.[0]?.llm_provider || lastLlmProvider.value;
+    }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "课程加载失败，请检查后端服务是否启动"));
   } finally {
@@ -687,10 +738,15 @@ async function ask() {
     const result = await askCourse(props.id, currentQuestion);
     lastLlmProvider.value = result.llm_provider || result.provider || "unknown";
     lastRetrievalProvider.value = result.retrieval_provider || "unknown";
+    lastAnswerStatus.value = result.answer_status || "answered";
+    lastConfidence.value = result.confidence || "medium";
     messages.value.push({
       id: Date.now(),
       question: currentQuestion,
       answer: result.answer,
+      answer_status: result.answer_status || "answered",
+      confidence: result.confidence || "medium",
+      source_count: result.source_count ?? result.sources?.length ?? 0,
       sources: result.sources
     });
     await loadCourse();
@@ -828,6 +884,68 @@ function issueTagType(level) {
     warning: "warning",
     error: "danger"
   }[level] || "info";
+}
+
+function answerStatusText(status) {
+  return {
+    answered: "已回答",
+    low_confidence: "依据不足",
+    empty_knowledge_base: "空知识库",
+    processing: "资料处理中",
+    needs_ocr: "需要 OCR",
+    "未调用": "未调用"
+  }[status] || status || "未知";
+}
+
+function answerStatusType(status) {
+  return {
+    answered: "success",
+    low_confidence: "warning",
+    empty_knowledge_base: "info",
+    processing: "warning",
+    needs_ocr: "warning",
+    "未调用": "info"
+  }[status] || "info";
+}
+
+function confidenceText(confidence) {
+  return {
+    high: "高",
+    medium: "中",
+    low: "低"
+  }[confidence] || "低";
+}
+
+function confidenceTagType(confidence) {
+  return {
+    high: "success",
+    medium: "warning",
+    low: "info"
+  }[confidence] || "info";
+}
+
+function formatScore(score) {
+  const value = Number(score);
+  return Number.isFinite(value) ? value.toFixed(3) : "-";
+}
+
+function sandboxText(level) {
+  return level === "local_tempdir_timeout_only" ? "本地临时目录+超时" : "安全演示模式";
+}
+
+function compileTagType(analysis) {
+  if (analysis?.sandbox_level === "disabled" || analysis?.compile_result?.executed === false) return "info";
+  return analysis?.compile_result?.success ? "success" : "danger";
+}
+
+function compileStatusText(analysis) {
+  if (analysis?.sandbox_level === "disabled" || analysis?.compile_result?.executed === false) return "安全模式下未执行";
+  return analysis?.compile_result?.success ? "编译成功" : "编译未通过";
+}
+
+function compileCommandText(analysis) {
+  if (analysis?.sandbox_level === "disabled" || analysis?.compile_result?.executed === false) return "未执行本地编译命令";
+  return analysis?.compile_result?.command || "g++ main.cpp -std=c++17";
 }
 
 function nextOcrInput(document) {

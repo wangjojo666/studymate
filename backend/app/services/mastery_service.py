@@ -34,6 +34,8 @@ class MasteryResult:
     main_error_type: str
     main_error_label: str
     explanation: str
+    mastery_formula: str
+    recent_attempts_summary: str
 
 
 def calculate_mastery(
@@ -88,6 +90,8 @@ def calculate_mastery(
         recent_wrong_count,
         main_error_label,
     )
+    mastery_formula = build_mastery_formula(score, level_label, correct_count, wrong_count, recent_wrong_count)
+    recent_attempts_summary = build_recent_attempts_summary(attempts[-3:])
 
     return MasteryResult(
         score=score,
@@ -99,6 +103,8 @@ def calculate_mastery(
         main_error_type=main_error_type,
         main_error_label=main_error_label,
         explanation=explanation,
+        mastery_formula=mastery_formula,
+        recent_attempts_summary=recent_attempts_summary,
     )
 
 
@@ -197,6 +203,42 @@ def build_explanation(
         f"该知识点累计答对 {correct_count} 次、答错 {wrong_count} 次，"
         f"{recent}主要错因为{main_error_label}，当前掌握度 {score} 分，因此被判定为{level_label}。"
     )
+
+
+def build_mastery_formula(
+    score: float,
+    level_label: str,
+    correct_count: int,
+    wrong_count: int,
+    recent_wrong_count: int,
+) -> str:
+    weak_reason = (
+        "低于 60 分会进入薄弱知识点列表。"
+        if score < 60
+        else "当前未低于 60 分，但仍会按掌握度排序用于复习建议。"
+    )
+    recent_text = f"最近 7 天答错 {recent_wrong_count} 次，会被 1.2 倍权重放大影响。" if recent_wrong_count else "最近 7 天没有新增错误记录。"
+    return (
+        f"初始掌握度为 {INITIAL_MASTERY:.0f} 分；"
+        "答对会按难度加分（基础 +5、提高/易错 +8、考试 +10），"
+        "答错会按难度扣分（基础 -8、提高 -12、考试/易错 -15）；"
+        "7 天内记录权重 1.2，8-30 天权重 1.0，30 天后权重 0.6。"
+        f"当前累计答对 {correct_count} 次、答错 {wrong_count} 次，{recent_text}"
+        f"最终掌握度为 {score} 分，被判定为“{level_label}”；{weak_reason}"
+    )
+
+
+def build_recent_attempts_summary(attempts: list[QuestionAttempt]) -> str:
+    if not attempts:
+        return "暂无练习记录，当前分数主要来自系统初始掌握度。"
+    parts: list[str] = []
+    for attempt in reversed(attempts):
+        result = "答对" if attempt.is_correct else "答错"
+        delta = mastery_delta(attempt.difficulty, attempt.is_correct)
+        weight = recency_weight(attempt.created_at)
+        reason = attempt.error_reason or "未标注错因"
+        parts.append(f"{attempt.created_at:%Y-%m-%d} {result}，难度 {attempt.difficulty}，基础变化 {delta:+.0f}，权重 {weight:.1f}，{reason}")
+    return "；".join(parts)
 
 
 def _age_days(created_at: datetime | None) -> int:

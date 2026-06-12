@@ -711,6 +711,9 @@ def _status_payload(db: Session, point: KnowledgePoint, status: UserKnowledgeSta
         "main_error_type": mastery.main_error_type,
         "main_error_label": mastery.main_error_label,
         "explanation": mastery.explanation,
+        "mastery_formula": mastery.mastery_formula,
+        "recent_attempts_summary": mastery.recent_attempts_summary,
+        "next_action": _next_action_for_status(point, mastery.score, state, mastery.wrong_count),
         "source_page": point.source_page,
         "source_document_id": point.source_document_id,
         "evidence": point.evidence[:180] if point.evidence else "",
@@ -732,6 +735,16 @@ def _mastery_state(score: float) -> str:
     if score >= 60:
         return "review"
     return "weak"
+
+
+def _next_action_for_status(point: KnowledgePoint, score: float, state: str, wrong_count: int) -> str:
+    page_text = f"资料 P{point.source_page}" if point.source_page else "对应课程资料"
+    if state == "weak":
+        reason = "最近错题较多" if wrong_count else "缺少有效练习记录或掌握度偏低"
+        return f"先回看{page_text}中的证据片段，整理定义/条件/易错点，再做 3 道基础题和 1 道变式题。判定原因：{reason}，当前 {score} 分。"
+    if state == "review":
+        return f"回看{page_text}，补做 2 道同类题确认是否真正掌握。当前 {score} 分，属于需要复习区间。"
+    return f"保持节奏：每周用 1 道综合题复测，并在遗忘前回看{page_text}。当前 {score} 分。"
 
 
 def _recommendations_from_weak_points(weak_points: list[dict]) -> list[dict]:

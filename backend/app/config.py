@@ -33,6 +33,13 @@ def _sqlite_url() -> str:
     return f"sqlite:///{(BASE_DIR / 'studymate.db').as_posix()}"
 
 
+def _bool_from_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "StudyMate")
@@ -48,6 +55,10 @@ class Settings:
     embedding_api_key: str = os.getenv("EMBEDDING_API_KEY", "")
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "384"))
     embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
+    rag_top_k: int = int(os.getenv("RAG_TOP_K", "5"))
+    rag_min_score: float = float(os.getenv("RAG_MIN_SCORE", "0.12"))
+    rag_context_max_chars: int = int(os.getenv("RAG_CONTEXT_MAX_CHARS", "6000"))
+    rag_enable_strict_source_mode: bool = _bool_from_env("RAG_ENABLE_STRICT_SOURCE_MODE", True)
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",
@@ -84,6 +95,9 @@ class Settings:
     auth_token_expire_minutes: int = int(os.getenv("AUTH_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
     demo_user_email: str = os.getenv("DEMO_USER_EMAIL", "demo@studymate.local")
     demo_user_password: str = os.getenv("DEMO_USER_PASSWORD", "studymate-demo")
+    cpp_run_enabled: bool = _bool_from_env("CPP_RUN_ENABLED", False)
+    cpp_compile_timeout_seconds: int = int(os.getenv("CPP_COMPILE_TIMEOUT_SECONDS", "8"))
+    cpp_run_timeout_seconds: int = int(os.getenv("CPP_RUN_TIMEOUT_SECONDS", "5"))
 
 
 settings = Settings()

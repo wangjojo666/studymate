@@ -74,6 +74,7 @@ def analyze_cpp_code(
         "explanation": explanation,
         "similar_exercises": _similar_exercises(exam_points),
         "error_diagnosis": error_diagnosis,
+        "sandbox_level": compile_payload.get("sandbox_level", "disabled"),
         "compile_result": compile_payload["compile_result"],
         "run_result": compile_payload["run_result"],
     }
@@ -168,9 +169,13 @@ def _offline_explanation(
     compile_result = compile_payload.get("compile_result", {})
     run_result = compile_payload.get("run_result", {})
     compile_lines = [
+        f"- 沙箱级别：{compile_payload.get('sandbox_level', 'disabled')}",
         f"- 编译器：{compile_result.get('compiler', 'g++')}",
-        f"- 编译状态：{'成功' if compile_result.get('success') else '失败或未执行'}",
     ]
+    if not compile_result.get("executed", True):
+        compile_lines.append("- 编译状态：安全演示模式下未执行本地编译运行")
+    else:
+        compile_lines.append(f"- 编译状态：{'成功' if compile_result.get('success') else '失败或未执行'}")
     if compile_result.get("stderr"):
         compile_lines.append(f"- 编译输出：{compile_result.get('stderr')[:500]}")
     if run_result.get("executed"):
@@ -232,6 +237,15 @@ def _compile_issues(compile_payload: dict) -> list[dict]:
     compile_result = compile_payload.get("compile_result", {})
     run_result = compile_payload.get("run_result", {})
     issues: list[dict] = []
+    if compile_payload.get("sandbox_level") == "disabled" or not compile_result.get("executed", True):
+        issues.append(
+            _issue(
+                "info",
+                "安全演示模式",
+                "当前 CPP_RUN_ENABLED=false，系统只做规则分析，未执行本地 g++ 编译或样例运行。",
+            )
+        )
+        return issues
     if not compile_result.get("compiler_available", True):
         issues.append(_issue("info", "未检测到 g++", compile_result.get("stderr") or "本机未安装 g++，已跳过编译诊断。"))
         return issues

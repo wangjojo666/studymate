@@ -132,6 +132,17 @@
               <strong>{{ point.name }}</strong>
               <span>{{ point.mastery_score }}% · {{ point.level_label }} · 错题 {{ point.wrong_count }} 次</span>
               <p>{{ point.explanation }}</p>
+              <div class="evidence-chain">
+                <b>为什么判定为薄弱</b>
+                <p>{{ point.mastery_formula || point.explanation }}</p>
+                <span>{{ point.recent_attempts_summary }}</span>
+                <small>
+                  来源：{{ point.source_document_id ? `资料 #${point.source_document_id}` : "暂无资料来源" }}
+                  {{ point.source_page ? ` · P${point.source_page}` : "" }}
+                </small>
+                <small>{{ point.evidence || "暂无证据片段，建议补充课程资料或重新同步知识点。" }}</small>
+                <p class="next-action">下一步：{{ point.next_action }}</p>
+              </div>
             </div>
             <el-button size="small" @click="prepareAttempt(point)">记录练习</el-button>
           </div>

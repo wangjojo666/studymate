@@ -6,19 +6,36 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from app.config import settings
 
-COMPILE_TIMEOUT_SECONDS = 8
-RUN_TIMEOUT_SECONDS = 5
+
+SAFE_MODE_MESSAGE = "当前处于安全演示模式，未执行本地编译运行。"
 
 
 def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
+    sandbox_level = "local_tempdir_timeout_only" if settings.cpp_run_enabled else "disabled"
+    if not settings.cpp_run_enabled:
+        return {
+            "sandbox_level": sandbox_level,
+            "compile_result": _compile_payload(
+                success=False,
+                compiler_available=bool(shutil.which("g++")),
+                command="",
+                stderr=SAFE_MODE_MESSAGE,
+                executed=False,
+            ),
+            "run_result": _run_payload(executed=False),
+        }
+
     if not code.strip():
         return {
+            "sandbox_level": sandbox_level,
             "compile_result": _compile_payload(
                 success=False,
                 compiler_available=False,
                 command="",
                 stderr="未提供 C++ 代码，已跳过编译诊断。",
+                executed=False,
             ),
             "run_result": _run_payload(executed=False),
         }
@@ -26,11 +43,13 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
     compiler = shutil.which("g++")
     if not compiler:
         return {
+            "sandbox_level": sandbox_level,
             "compile_result": _compile_payload(
                 success=False,
                 compiler_available=False,
                 command="g++ main.cpp -std=c++17 -Wall -Wextra -O0 -o main",
                 stderr="未检测到 g++，已跳过编译诊断。请安装 MinGW-w64、MSYS2 或系统 g++ 后重试。",
+                executed=False,
             ),
             "run_result": _run_payload(executed=False),
         }
@@ -48,7 +67,7 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
                 cwd=tmp_path,
                 capture_output=True,
                 text=True,
-                timeout=COMPILE_TIMEOUT_SECONDS,
+                timeout=settings.cpp_compile_timeout_seconds,
                 check=False,
             )
             compile_result = _compile_payload(
@@ -59,21 +78,30 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
             )
         except subprocess.TimeoutExpired:
             return {
+                "sandbox_level": sandbox_level,
                 "compile_result": _compile_payload(
                     success=False,
                     compiler_available=True,
                     command=command_text,
-                    stderr=f"编译超过 {COMPILE_TIMEOUT_SECONDS} 秒，已终止。",
+                    stderr=f"编译超过 {settings.cpp_compile_timeout_seconds} 秒，已终止。",
                     timeout=True,
                 ),
                 "run_result": _run_payload(executed=False),
             }
 
         if not compile_result["success"]:
-            return {"compile_result": compile_result, "run_result": _run_payload(executed=False)}
+            return {
+                "sandbox_level": sandbox_level,
+                "compile_result": compile_result,
+                "run_result": _run_payload(executed=False),
+            }
 
         if sample_input.strip() == "":
-            return {"compile_result": compile_result, "run_result": _run_payload(executed=False)}
+            return {
+                "sandbox_level": sandbox_level,
+                "compile_result": compile_result,
+                "run_result": _run_payload(executed=False),
+            }
 
         try:
             run_process = subprocess.run(
@@ -82,7 +110,7 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
                 input=sample_input,
                 capture_output=True,
                 text=True,
-                timeout=RUN_TIMEOUT_SECONDS,
+                timeout=settings.cpp_run_timeout_seconds,
                 check=False,
             )
             run_result = _run_payload(
@@ -100,7 +128,7 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
                 stderr=exc.stderr or "",
                 timeout=True,
             )
-        return {"compile_result": compile_result, "run_result": run_result}
+        return {"sandbox_level": sandbox_level, "compile_result": compile_result, "run_result": run_result}
 
 
 def _compile_payload(
@@ -109,6 +137,7 @@ def _compile_payload(
     command: str,
     stderr: str,
     timeout: bool = False,
+    executed: bool = True,
 ) -> dict:
     warnings, errors = _split_diagnostics(stderr)
     return {
@@ -120,6 +149,7 @@ def _compile_payload(
         "warnings": warnings,
         "errors": errors,
         "timeout": timeout,
+        "executed": executed,
     }
 
 

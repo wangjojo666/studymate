@@ -8,6 +8,10 @@ def test_mastery_formula_explains_wrong_attempt(client, auth_helpers):
     point = profile_response.json()["knowledge_points"][0]
     assert point["mastery_score"] == 60.0
     assert point["explanation"]
+    assert point["mastery_formula"]
+    assert point["recent_attempts_summary"]
+    assert point["next_action"]
+    assert "初始掌握度" in point["mastery_formula"]
 
     attempt_response = client.post(
         f"/api/courses/{course['id']}/learning/attempts",
@@ -27,6 +31,8 @@ def test_mastery_formula_explains_wrong_attempt(client, auth_helpers):
     assert status["wrong_count"] == 1
     assert status["main_error_type"] == "formula_error"
     assert "公式/定义记忆错误" in status["explanation"]
+    assert "答错" in status["recent_attempts_summary"]
+    assert "当前" in status["next_action"]
 
 
 def test_correct_attempt_increases_mastery(client, auth_helpers):
