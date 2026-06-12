@@ -20,9 +20,8 @@ OFFLINE_PROVIDER = "mock/offline"
 
 
 def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) -> dict:
+    # 问答流程：检索课程片段 -> 组装上下文 -> 调用模型；检索不到时明确说明依据不足。
     sources = search_course(db, course_id, question, top_k)
-    if not sources:
-        sources = get_representative_chunks(db, course_id, top_k)
     retrieval_provider = retrieval_provider_from_results(sources)
     context = _build_context(sources)
     if sources:
@@ -31,7 +30,7 @@ def answer_question(db: Session, course_id: int, question: str, top_k: int = 5) 
                 "role": "system",
                 "content": (
                     "你是 StudyMate 课程资料问答助手。只能基于用户上传的课程资料回答；"
-                    "如果资料不足，要明确说明。回答要结构清晰，并在最后提示用户查看来源。"
+                    "如果资料依据不足，要明确说明。回答要结构清晰，并提示用户查看来源。"
                 ),
             },
             {
@@ -189,16 +188,18 @@ def _sources_payload(sources: list[SearchResult]) -> list[dict]:
 def _empty_knowledge_base_message(db: Session, course_id: int) -> str:
     documents = db.query(Document).filter(Document.course_id == course_id).all()
     if not documents:
-        return "当前课程还没有上传资料。请先上传课程 PDF、PPT、Word 或 TXT。"
+        return "当前课程还没有上传资料。请先上传 PDF、PPT、Word 或 TXT 资料。"
     if any(document.status == "needs_ocr" for document in documents):
         return (
-            "你已经上传了资料，但这份 PDF 是扫描版/图片版，没有可提取的文字层，"
-            "所以还没有进入可检索知识库。请在资料卡片点击 OCR 入库；也可以先用其他 OCR 工具"
-            "生成带文本层的 PDF 后重新上传，再进行问答、复习提纲和练习题生成。"
+            "已上传资料，但部分 PDF 可能是扫描版或图片版，暂时没有可检索文本。"
+            "请在资料卡片中启动 OCR，或上传带文本层的 PDF 后再提问。"
         )
+    processing_statuses = {"uploaded", "queued", "parsing", "chunking", "indexing", "syncing_knowledge_points"}
+    if any(document.status in processing_statuses for document in documents):
+        return "资料正在后台解析入库，请稍后刷新状态，等资料显示为已入库后再提问。"
     if any(document.status == "failed" for document in documents):
-        return "资料上传后解析失败，请查看资料卡片上的错误提示，处理后重新上传。"
-    return "当前课程资料还没有生成可检索片段。请确认文件中包含可复制的文本内容。"
+        return "资料解析失败，请查看资料卡片上的错误提示，处理后重新上传。"
+    return "资料中没有找到足够依据回答这个问题。请换一个更贴近资料内容的问题，或补充上传相关课程资料。"
 
 
 def _get_focus_point(db: Session, course_id: int, knowledge_point_id: int | None) -> KnowledgePoint | None:

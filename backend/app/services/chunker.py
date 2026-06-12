@@ -12,6 +12,7 @@ class TextChunk:
 def split_pages_into_chunks(
     pages: list[tuple[int, str]], max_chars: int = 900, overlap: int = 160
 ) -> list[TextChunk]:
+    # 将按页解析出的文本切成可检索片段，并保留页码用于前端展示来源。
     chunks: list[TextChunk] = []
     for page_number, text in pages:
         normalized = "\n".join(line.strip() for line in text.splitlines() if line.strip())

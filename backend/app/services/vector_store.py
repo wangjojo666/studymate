@@ -196,10 +196,10 @@ def get_representative_chunks(db: Session, course_id: int, limit: int = 8) -> li
             document_name=document.original_filename,
             page_number=chunk.page_number,
             chunk_index=chunk.chunk_index,
-                content=chunk.content,
-                score=1.0,
-                retrieval_provider="representative_chunks",
-            )
+            content=chunk.content,
+            score=1.0,
+            retrieval_provider="representative_chunks",
+        )
         for chunk, document in rows
     ]
 

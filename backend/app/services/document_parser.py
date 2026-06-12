@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 def parse_document(path: Path) -> list[tuple[int, str]]:
+    # 按文件类型提取文本，统一返回 (页码, 文本) 列表供后续切片和检索使用。
     suffix = path.suffix.lower()
     if suffix == ".txt":
         return _parse_txt(path)
@@ -13,7 +14,7 @@ def parse_document(path: Path) -> list[tuple[int, str]]:
         return _parse_pptx(path)
     if suffix == ".pdf":
         return _parse_pdf(path)
-    raise ValueError("暂不支持该文件类型，请上传 PDF、PPTX、DOCX 或 TXT。")
+    raise ValueError("暂不支持该文件类型，请上传 PDF、PPTX、DOCX、TXT 或图片文件。")
 
 
 def _parse_txt(path: Path) -> list[tuple[int, str]]:
@@ -45,7 +46,7 @@ def _parse_pptx(path: Path) -> list[tuple[int, str]]:
     try:
         from pptx import Presentation
     except ImportError as exc:
-        raise RuntimeError("缺少 python-pptx，无法解析 PPT。") from exc
+        raise RuntimeError("缺少 python-pptx，无法解析 PPT 文档。") from exc
 
     presentation = Presentation(str(path))
     pages: list[tuple[int, str]] = []
@@ -67,9 +68,7 @@ def _parse_pdf(path: Path) -> list[tuple[int, str]]:
     if pypdf_pages:
         return pypdf_pages
 
-    raise RuntimeError(
-        "当前 Python 环境缺少 PDF 文本解析库。请安装 pypdf 或 PyMuPDF 后重新上传 PDF。"
-    )
+    raise RuntimeError("当前 Python 环境缺少 PDF 文本解析库，请安装 pypdf 或 PyMuPDF 后重试。")
 
 
 def _parse_pdf_with_pymupdf(path: Path) -> list[tuple[int, str]]:
