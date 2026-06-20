@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user, learning_user_id
-from app.models.entities import Course, User
+from app.models.entities import Course, Document, DocumentChunk, User
 from app.schemas import AskRequest, PracticeRequest
 from app.services.rag_service import answer_question, generate_outline, generate_practice
 
@@ -50,6 +50,37 @@ def create_practice(
         knowledge_point_id=payload.knowledge_point_id,
         user_id=learning_user_id(current_user),
     )
+
+
+@router.get("/chunks/{chunk_id}")
+def get_chunk_source(
+    course_id: int,
+    chunk_id: int,
+    score: float | None = Query(default=None),
+    retrieval_provider: str = Query(default=""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    _ensure_course(db, course_id, current_user.id)
+    row = (
+        db.query(DocumentChunk, Document)
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .filter(DocumentChunk.id == chunk_id, DocumentChunk.course_id == course_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="来源片段不存在")
+    chunk, document = row
+    return {
+        "chunk_id": chunk.id,
+        "document_id": document.id,
+        "document_name": document.original_filename,
+        "page": chunk.page_number,
+        "chunk_index": chunk.chunk_index,
+        "score": score,
+        "content": chunk.content,
+        "retrieval_provider": retrieval_provider,
+    }
 
 
 def _ensure_course(db: Session, course_id: int, user_id: int) -> Course:

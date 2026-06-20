@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import settings
+from app.utils.time import utc_now
 
 
 connect_args = {}
@@ -134,7 +133,7 @@ def _mark_interrupted_ocr_jobs(db: Session) -> None:
     for job in jobs:
         document = db.get(Document, job.document_id)
         job.status = "failed"
-        job.finished_at = datetime.utcnow()
+        job.finished_at = utc_now()
         job.error_message = "OCR 任务因服务重启已中断，请使用快速索引模式重新开始。"
         if document:
             document.status = "indexed" if document.chunk_count else "needs_ocr"

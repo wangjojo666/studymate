@@ -97,6 +97,16 @@ export async function deleteDocument(courseId, documentId) {
   return data;
 }
 
+export async function reindexCourse(courseId) {
+  const { data } = await http.post(`/courses/${courseId}/reindex`);
+  return data;
+}
+
+export async function reindexDocument(courseId, documentId) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/reindex`);
+  return data;
+}
+
 export async function ocrDocument(courseId, documentId, payload) {
   const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr`, payload);
   return data;
@@ -122,6 +132,11 @@ export async function askCourse(courseId, question) {
     question,
     top_k: 5
   });
+  return data;
+}
+
+export async function getSourceChunk(courseId, chunkId, params = {}) {
+  const { data } = await http.get(`/courses/${courseId}/chunks/${chunkId}`, { params });
   return data;
 }
 

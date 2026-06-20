@@ -6,10 +6,7 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Te
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-
-
-def utcnow() -> datetime:
-    return datetime.utcnow()
+from app.utils.time import utc_now
 
 
 class User(Base):
@@ -19,8 +16,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), default="")
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     courses: Mapped[list["Course"]] = relationship(back_populates="user")
 
@@ -33,8 +30,8 @@ class Course(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
     last_asked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="courses")
@@ -64,8 +61,8 @@ class Document(Base):
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     course: Mapped[Course] = relationship(back_populates="documents")
@@ -85,7 +82,7 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     token_weights: Mapped[str] = mapped_column(Text, nullable=False)
     vector_norm: Mapped[float] = mapped_column(Float, default=0.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     course: Mapped[Course] = relationship(back_populates="chunks")
     document: Mapped[Document] = relationship(back_populates="chunks")
@@ -106,8 +103,8 @@ class KnowledgePoint(Base):
     source_document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), nullable=True)
     source_page: Mapped[int] = mapped_column(Integer, default=0)
     evidence: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     course: Mapped[Course] = relationship(back_populates="knowledge_points")
     chunk_links: Mapped[list["ChunkKnowledgePoint"]] = relationship(
@@ -131,7 +128,7 @@ class ChunkKnowledgePoint(Base):
         ForeignKey("knowledge_points.id"), index=True, nullable=False
     )
     weight: Mapped[float] = mapped_column(Float, default=1.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     chunk: Mapped[DocumentChunk] = relationship(back_populates="knowledge_links")
     knowledge_point: Mapped[KnowledgePoint] = relationship(back_populates="chunk_links")
@@ -158,7 +155,7 @@ class UserKnowledgeStatus(Base):
     wrong_count: Mapped[int] = mapped_column(Integer, default=0)
     review_count: Mapped[int] = mapped_column(Integer, default=0)
     last_review_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     knowledge_point: Mapped[KnowledgePoint] = relationship(back_populates="statuses")
 
@@ -178,7 +175,7 @@ class QuestionAttempt(Base):
     is_correct: Mapped[bool] = mapped_column(Boolean, default=False)
     error_reason: Mapped[str] = mapped_column(Text, default="")
     difficulty: Mapped[str] = mapped_column(String(20), default="basic")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class ReviewTask(Base):
@@ -197,8 +194,8 @@ class ReviewTask(Base):
     status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     estimated_minutes: Mapped[int] = mapped_column(Integer, default=25)
     priority: Mapped[int] = mapped_column(Integer, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class ChatMessage(Base):
@@ -209,7 +206,7 @@ class ChatMessage(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     sources_json: Mapped[str] = mapped_column(Text, default="[]")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class GeneratedMaterial(Base):
@@ -220,7 +217,7 @@ class GeneratedMaterial(Base):
     kind: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources_json: Mapped[str] = mapped_column(Text, default="[]")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class OcrJob(Base):
@@ -237,6 +234,6 @@ class OcrJob(Base):
     processed_pages: Mapped[int] = mapped_column(Integer, default=0)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

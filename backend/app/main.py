@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,15 @@ from app.routers import assistant, auth, courses, cpp_tools, documents, learning
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    validate_runtime_settings()
+    init_database()
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,12 +37,6 @@ app.include_router(documents.router, prefix=settings.api_prefix)
 app.include_router(assistant.router, prefix=settings.api_prefix)
 app.include_router(learning.router, prefix=settings.api_prefix)
 app.include_router(cpp_tools.router, prefix=settings.api_prefix)
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    validate_runtime_settings()
-    init_database()
 
 
 @app.get("/")

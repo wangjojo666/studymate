@@ -878,7 +878,12 @@ pre {
   padding: 5px 8px;
   color: #1d4ed8;
   background: #eff6ff;
-  cursor: default;
+  cursor: pointer;
+}
+
+.source-strip button:hover {
+  border-color: #60a5fa;
+  background: #dbeafe;
 }
 
 .ask-bar {
@@ -917,6 +922,73 @@ pre {
 
 .practice-select {
   width: 132px;
+}
+
+.practice-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.practice-card {
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.practice-card-head,
+.practice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.practice-card-head span,
+.practice-result {
+  color: var(--text-sub);
+  font-size: 12px;
+}
+
+.practice-question {
+  margin: 12px 0;
+  color: #0f172a;
+  line-height: 1.65;
+  font-weight: 700;
+}
+
+.practice-options {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: #334155;
+  line-height: 1.7;
+}
+
+.practice-answer {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+}
+
+.practice-answer strong,
+.practice-answer p {
+  display: block;
+}
+
+.practice-answer p {
+  margin: 5px 0 10px;
+  color: #334155;
+  line-height: 1.6;
+}
+
+.practice-answer p:last-child {
+  margin-bottom: 0;
+}
+
+.practice-actions {
+  margin-top: 10px;
 }
 
 .provider-tags {

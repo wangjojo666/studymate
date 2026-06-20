@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
@@ -16,8 +15,11 @@ from app.services.chunker import split_pages_into_chunks
 from app.services.document_parser import parse_document
 from app.services.learning_service import sync_course_knowledge_points
 from app.services.ocr_service import ocr_pdf_with_qwen_vl
+from app.services.reindex_service import reindex_document
+from app.services.upload_validation import UploadValidationError, validate_upload_file
 from app.services.vector_store import delete_chunks_from_index, delete_document_index, index_document_chunks
 from app.services.vision_service import IMAGE_SUFFIXES, describe_courseware_image
+from app.utils.time import utc_now
 
 
 router = APIRouter(prefix="/courses/{course_id}/documents", tags=["documents"])
@@ -51,9 +53,15 @@ def upload_document(
 
     course_dir = settings.upload_dir / str(course_id)
     course_dir.mkdir(parents=True, exist_ok=True)
-    stored_filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{_safe_filename(file.filename)}"
+    stored_filename = f"{utc_now().strftime('%Y%m%d%H%M%S')}_{_safe_filename(file.filename)}"
     target = course_dir / stored_filename
     _save_upload_with_limit(file, target, max_bytes)
+    try:
+        validate_upload_file(target, suffix)
+    except UploadValidationError as exc:
+        target.unlink(missing_ok=True)
+        _remove_empty_parent(course_dir)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     document = Document(
         course_id=course_id,
@@ -144,6 +152,22 @@ def delete_document(
             return {"ok": True, "warning": "资料记录已删除，但本地文件删除失败，请手动检查 storage/uploads。"}
     _remove_empty_parent(file_path.parent)
     return {"ok": True}
+
+
+@router.post("/{document_id}/reindex")
+def reindex_single_document(
+    course_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    course = _get_owned_course(db, course_id, current_user.id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    document = db.get(Document, document_id)
+    if document is None or document.course_id != course_id:
+        raise HTTPException(status_code=404, detail="资料不存在")
+    return reindex_document(db, document)
 
 
 @router.post("/{document_id}/vision")
@@ -278,7 +302,7 @@ def cancel_ocr_job(
         return _ocr_job_payload(job, document)
 
     job.status = "cancelled"
-    job.finished_at = datetime.utcnow()
+    job.finished_at = utc_now()
     job.error_message = f"OCR 已停止，已保留 {job.processed_pages} 页识别结果。"
     document.status = "indexed" if document.chunk_count else "needs_ocr"
     document.processing_stage = document.status
@@ -299,7 +323,7 @@ def _run_ocr_job(job_id: int) -> None:
         if document is None:
             job.status = "failed"
             job.error_message = "资料不存在，OCR 任务无法继续。"
-            job.finished_at = datetime.utcnow()
+            job.finished_at = utc_now()
             db.commit()
             return
 
@@ -400,12 +424,12 @@ def _run_ocr_job(job_id: int) -> None:
             job.total_pages = result.total_pages
             job.processed_pages = result.processed_pages
             job.chunk_count = len(chunks)
-            job.finished_at = datetime.utcnow()
+            job.finished_at = utc_now()
             if document.chunk_count:
                 document.status = "indexed"
                 document.processing_stage = "indexed"
                 document.processing_progress = 100
-                document.indexed_at = datetime.utcnow()
+                document.indexed_at = utc_now()
                 document.error_message = (
                     f"{mode_label}已处理第 {job.start_page} 页起的 {result.processed_pages} 页，"
                     f"新增 {len(chunks)} 个知识片段。"
@@ -420,7 +444,7 @@ def _run_ocr_job(job_id: int) -> None:
         except Exception as exc:  # noqa: BLE001 - surface OCR failure to the UI.
             job.status = "failed"
             job.error_message = str(exc)
-            job.finished_at = datetime.utcnow()
+            job.finished_at = utc_now()
             document.status = "indexed" if document.chunk_count else "needs_ocr"
             document.processing_stage = document.status
             document.processing_progress = 100
@@ -494,7 +518,7 @@ def _finish_document_processing(document: Document) -> None:
     document.processing_stage = document.status
     document.processing_progress = 100
     if document.status == "indexed":
-        document.indexed_at = datetime.utcnow()
+        document.indexed_at = utc_now()
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -532,7 +556,7 @@ def _index_image_document(db: Session, course: Course, document: Document, user_
         document.status = "indexed"
         document.processing_stage = "indexed"
         document.processing_progress = 100
-        document.indexed_at = datetime.utcnow()
+        document.indexed_at = utc_now()
         document.error_message = "图片课件已完成多模态识别并加入知识库。"
     else:
         document.status = "empty"

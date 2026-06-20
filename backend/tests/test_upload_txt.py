@@ -107,7 +107,7 @@ def test_upload_image_courseware_with_mock_vision(client):
 
     upload_response = client.post(
         f"/api/courses/{course_id}/documents",
-        files={"file": ("virtual-function.png", b"fake-image-bytes", "image/png")},
+        files={"file": ("virtual-function.png", b"\x89PNG\r\n\x1a\nmock-image-bytes", "image/png")},
     )
 
     assert upload_response.status_code == 200

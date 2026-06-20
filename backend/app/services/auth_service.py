@@ -6,9 +6,10 @@ import hmac
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.config import settings
+from app.utils.time import utc_now
 
 
 HASH_NAME = "sha256"
@@ -50,7 +51,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def create_access_token(user_id: int) -> str:
-    expires_at = datetime.utcnow() + timedelta(minutes=settings.auth_token_expire_minutes)
+    expires_at = utc_now() + timedelta(minutes=settings.auth_token_expire_minutes)
     header = {"alg": TOKEN_ALGORITHM, "typ": "JWT"}
     payload = {"sub": str(user_id), "exp": int(expires_at.timestamp())}
     signing_input = ".".join([_json_b64(header), _json_b64(payload)])

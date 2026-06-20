@@ -180,6 +180,10 @@ def delete_course_index(course_id: int) -> None:
         logger.warning("Failed to delete Chroma course index: %s", exc)
 
 
+def upsert_chunks_to_index(chunks: list[DocumentChunk]) -> None:
+    _upsert_chroma_chunks(chunks)
+
+
 def get_representative_chunks(db: Session, course_id: int, limit: int = 8) -> list[SearchResult]:
     rows = (
         db.query(DocumentChunk, Document)

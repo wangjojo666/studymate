@@ -36,7 +36,19 @@
               <h2>课程资料</h2>
               <span>支持文档、扫描版 PDF 和公式/流程图/代码/电路图片入库</span>
             </div>
-            <el-tag type="info">{{ course?.document_count || 0 }} 份</el-tag>
+            <div class="provider-tags">
+              <el-tag type="info">{{ course?.document_count || 0 }} 份</el-tag>
+              <el-tag effect="plain">Embedding：{{ course?.embedding_provider || "未配置" }}</el-tag>
+              <el-button
+                size="small"
+                :loading="reindexingCourse"
+                :disabled="hasProcessingDocuments"
+                @click="runCourseReindex"
+              >
+                <el-icon><Refresh /></el-icon>
+                重新索引
+              </el-button>
+            </div>
           </div>
           <el-empty v-if="!course?.documents?.length" description="暂无资料" />
           <div v-else class="document-list">
@@ -80,6 +92,15 @@
                   @click="runVision(document)"
                 >
                   识别入库
+                </el-button>
+                <el-button
+                  size="small"
+                  :loading="reindexingDocumentId === document.id"
+                  :disabled="Boolean(activeOcrJob(document.id)) || isDocumentProcessing(document) || !document.chunk_count"
+                  @click="runDocumentReindex(document)"
+                >
+                  <el-icon><Refresh /></el-icon>
+                  重新索引
                 </el-button>
                 <el-button
                   v-if="activeOcrJob(document.id)"
@@ -140,7 +161,12 @@
                 </div>
                 <pre>{{ message.answer }}</pre>
                 <div v-if="message.sources?.length" class="source-strip">
-                  <button v-for="source in message.sources" :key="sourceKey(source)">
+                  <button
+                    v-for="source in message.sources"
+                    :key="sourceKey(source)"
+                    type="button"
+                    @click="openSource(source, message.retrieval_provider)"
+                  >
                     《{{ source.document_name }}》P{{ source.page }} · score {{ formatScore(source.score) }}
                   </button>
                 </div>
@@ -177,7 +203,7 @@
           </div>
           <pre>{{ outline || "待生成" }}</pre>
           <div v-if="outlineSources.length" class="source-strip">
-            <button v-for="source in outlineSources" :key="sourceKey(source)">
+            <button v-for="source in outlineSources" :key="sourceKey(source)" type="button" @click="openSource(source)">
               《{{ source.document_name }}》P{{ source.page }}
             </button>
           </div>
@@ -220,12 +246,68 @@
               </el-button>
             </div>
           </div>
-          <pre>{{ practice || "待生成" }}</pre>
-          <div v-if="practiceSources.length" class="source-strip">
-            <button v-for="source in practiceSources" :key="sourceKey(source)">
-              《{{ source.document_name }}》P{{ source.page }}
-            </button>
+          <div v-if="practiceItems.length" class="practice-card-list">
+            <div v-for="item in practiceItems" :key="practiceItemKey(item)" class="practice-card">
+              <div class="practice-card-head">
+                <el-tag>{{ item.question_type || item.type || "练习题" }}</el-tag>
+                <span>{{ (item.knowledge_points || []).join(" / ") || "核心概念" }}</span>
+              </div>
+              <p class="practice-question">{{ item.question }}</p>
+              <ol v-if="item.options?.length" class="practice-options">
+                <li v-for="option in item.options" :key="option">{{ option }}</li>
+              </ol>
+              <div v-if="practiceAttemptState[practiceItemKey(item)]?.showAnswer" class="practice-answer">
+                <strong>参考答案</strong>
+                <p>{{ item.reference_answer || item.answer }}</p>
+                <strong>解析</strong>
+                <p>{{ item.explanation }}</p>
+              </div>
+              <el-input
+                v-model="practiceAttemptState[practiceItemKey(item)].errorReason"
+                type="textarea"
+                :rows="2"
+                placeholder="答错时填写错因，例如概念混淆、公式记忆错误、步骤跳跃"
+              />
+              <div class="practice-actions">
+                <el-button size="small" @click="togglePracticeAnswer(item)">
+                  {{ practiceAttemptState[practiceItemKey(item)]?.showAnswer ? "收起答案" : "查看答案" }}
+                </el-button>
+                <el-button
+                  size="small"
+                  type="success"
+                  :loading="practiceAttemptState[practiceItemKey(item)]?.submitting === 'correct'"
+                  @click="submitPracticeResult(item, true)"
+                >
+                  标记答对
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="practiceAttemptState[practiceItemKey(item)]?.submitting === 'wrong'"
+                  @click="submitPracticeResult(item, false)"
+                >
+                  标记答错
+                </el-button>
+                <span v-if="practiceAttemptState[practiceItemKey(item)]?.result" class="practice-result">
+                  {{ practiceAttemptState[practiceItemKey(item)].result }}
+                </span>
+              </div>
+              <div v-if="item.sources?.length" class="source-strip">
+                <button v-for="source in item.sources" :key="sourceKey(source)" type="button" @click="openSource(source)">
+                  《{{ source.document_name }}》P{{ source.page }}
+                </button>
+              </div>
+            </div>
           </div>
+          <template v-else>
+            <pre>{{ practice || "待生成" }}</pre>
+            <div v-if="practiceSources.length" class="source-strip">
+              <button v-for="source in practiceSources" :key="sourceKey(source)" type="button" @click="openSource(source)">
+                《{{ source.document_name }}》P{{ source.page }}
+              </button>
+            </div>
+          </template>
         </div>
       </el-tab-pane>
 
@@ -420,6 +502,12 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+    <SourceDrawer
+      v-model="sourceDrawerOpen"
+      :source="activeSource"
+      :loading="sourceLoading"
+      @copy="copySourceReference"
+    />
   </div>
 </template>
 
@@ -428,6 +516,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 
+import SourceDrawer from "../components/SourceDrawer.vue";
 import {
   analyzeCppCode,
   askCourse,
@@ -435,10 +524,14 @@ import {
   deleteDocument,
   generateOutline,
   generatePractice,
+  getSourceChunk,
   getLearningProfile,
   getOcrJob,
   getCourse,
   ocrDocument,
+  reindexCourse,
+  reindexDocument,
+  submitPracticeAttempt,
   uploadDocument,
   visionDocument
 } from "../api/client";
@@ -461,6 +554,8 @@ const outline = ref("");
 const outlineSources = ref([]);
 const practice = ref("");
 const practiceSources = ref([]);
+const practiceItems = ref([]);
+const practiceAttemptState = ref({});
 const practiceCount = ref(10);
 const practiceDifficulty = ref("basic");
 const practiceKnowledgePointId = ref(null);
@@ -470,9 +565,14 @@ const lastAnswerStatus = ref("未调用");
 const lastConfidence = ref("low");
 const ocrRunningId = ref(null);
 const visionRunningId = ref(null);
+const reindexingCourse = ref(false);
+const reindexingDocumentId = ref(null);
 const ocrJobs = ref({});
 const ocrPollTimer = ref(null);
 const documentPollTimer = ref(null);
+const sourceDrawerOpen = ref(false);
+const activeSource = ref(null);
+const sourceLoading = ref(false);
 const analyzingCpp = ref(false);
 const cppAnalysis = ref(null);
 const cppForm = reactive({
@@ -528,7 +628,9 @@ async function loadCourse() {
         answer_status: message.answer_status || "answered",
         confidence: message.confidence || "medium",
         source_count: message.source_count ?? message.sources?.length ?? 0,
-        sources: message.sources || []
+        sources: message.sources || [],
+        retrieval_provider: message.retrieval_provider || "",
+        llm_provider: message.llm_provider || ""
       }));
     const latestMessage = messages.value[messages.value.length - 1];
     if (latestMessage) {
@@ -663,6 +765,32 @@ async function removeDocument(document) {
   }
 }
 
+async function runCourseReindex() {
+  reindexingCourse.value = true;
+  try {
+    const result = await reindexCourse(props.id);
+    ElMessage.success(`已重新索引 ${result.chunk_count || 0} 个片段`);
+    await loadCourse();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "重新索引失败，请检查后端服务是否启动"));
+  } finally {
+    reindexingCourse.value = false;
+  }
+}
+
+async function runDocumentReindex(document) {
+  reindexingDocumentId.value = document.id;
+  try {
+    const result = await reindexDocument(props.id, document.id);
+    ElMessage.success(`资料已重新索引：${result.chunk_count || 0} 个片段`);
+    await loadCourse();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "资料重新索引失败，请检查后端服务是否启动"));
+  } finally {
+    reindexingDocumentId.value = null;
+  }
+}
+
 function setOcrJob(job) {
   ocrJobs.value = {
     ...ocrJobs.value,
@@ -747,7 +875,9 @@ async function ask() {
       answer_status: result.answer_status || "answered",
       confidence: result.confidence || "medium",
       source_count: result.source_count ?? result.sources?.length ?? 0,
-      sources: result.sources
+      sources: result.sources || [],
+      retrieval_provider: result.retrieval_provider || "",
+      llm_provider: result.llm_provider || result.provider || ""
     });
     await loadCourse();
   } catch (error) {
@@ -782,13 +912,117 @@ async function makePractice() {
     });
     lastLlmProvider.value = result.provider || "unknown";
     practice.value = result.content;
-    practiceSources.value = result.sources;
+    practiceSources.value = result.sources || [];
+    practiceItems.value = result.items || [];
+    resetPracticeState(practiceItems.value);
     await loadCourse();
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "练习题生成失败，请检查后端服务是否启动"));
   } finally {
     generatingPractice.value = false;
   }
+}
+
+async function openSource(source, retrievalProvider = "") {
+  const provider = source.retrieval_provider || retrievalProvider || lastRetrievalProvider.value || "";
+  activeSource.value = {
+    ...source,
+    retrieval_provider: provider,
+    content: source.content || ""
+  };
+  sourceDrawerOpen.value = true;
+  if (!source.chunk_id) {
+    sourceLoading.value = false;
+    return;
+  }
+  sourceLoading.value = true;
+  try {
+    const detail = await getSourceChunk(props.id, source.chunk_id, {
+      score: source.score,
+      retrieval_provider: provider
+    });
+    activeSource.value = {
+      ...source,
+      ...detail,
+      retrieval_provider: detail.retrieval_provider || provider
+    };
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "来源片段加载失败"));
+  } finally {
+    sourceLoading.value = false;
+  }
+}
+
+async function copySourceReference() {
+  if (!activeSource.value) return;
+  const source = activeSource.value;
+  const reference = [
+    `《${source.document_name || "未知资料"}》P${source.page || "-"} chunk ${source.chunk_index ?? "-"}`,
+    source.score !== null && source.score !== undefined ? `score ${formatScore(source.score)}` : "",
+    source.retrieval_provider ? `provider ${source.retrieval_provider}` : "",
+    source.content || source.preview || ""
+  ].filter(Boolean).join("\n");
+  try {
+    await window.navigator.clipboard.writeText(reference);
+    ElMessage.success("引用已复制");
+  } catch {
+    ElMessage.warning("浏览器暂不允许复制，请手动选中文本");
+  }
+}
+
+function resetPracticeState(items) {
+  practiceAttemptState.value = Object.fromEntries(
+    items.map((item) => [
+      practiceItemKey(item),
+      { showAnswer: false, errorReason: "", submitting: "", result: "" }
+    ])
+  );
+}
+
+function togglePracticeAnswer(item) {
+  const state = ensurePracticeState(item);
+  state.showAnswer = !state.showAnswer;
+}
+
+async function submitPracticeResult(item, isCorrect) {
+  const key = practiceItemKey(item);
+  const state = ensurePracticeState(item);
+  state.submitting = isCorrect ? "correct" : "wrong";
+  try {
+    await submitPracticeAttempt(props.id, {
+      knowledge_point_id: resolvePracticeKnowledgePointId(item),
+      question_text: item.question,
+      user_answer: isCorrect ? (item.reference_answer || item.answer || "已掌握") : "答错",
+      correct_answer: item.reference_answer || item.answer || "",
+      is_correct: isCorrect,
+      error_reason: isCorrect ? "" : (state.errorReason || "未标注错因"),
+      difficulty: practiceDifficulty.value
+    });
+    state.result = isCorrect ? "已标记答对" : "已记录错因";
+    practiceAttemptState.value = { ...practiceAttemptState.value, [key]: state };
+    await loadCourse();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, "练习记录提交失败"));
+  } finally {
+    state.submitting = "";
+  }
+}
+
+function ensurePracticeState(item) {
+  const key = practiceItemKey(item);
+  if (!practiceAttemptState.value[key]) {
+    practiceAttemptState.value[key] = { showAnswer: false, errorReason: "", submitting: "", result: "" };
+  }
+  return practiceAttemptState.value[key];
+}
+
+function resolvePracticeKnowledgePointId(item) {
+  if (practiceKnowledgePointId.value) return practiceKnowledgePointId.value;
+  const names = item.knowledge_points || [];
+  const matched = knowledgePointOptions.value.find((point) =>
+    names.some((name) => point.name === name || point.name.includes(name) || name.includes(point.name))
+  );
+  return matched?.id || null;
 }
 
 async function analyzeCpp() {
@@ -978,7 +1212,11 @@ function ocrJobText(job) {
 }
 
 function sourceKey(source) {
-  return `${source.document_id}-${source.page}-${source.chunk_index}`;
+  return `${source.chunk_id || source.document_id}-${source.page}-${source.chunk_index}`;
+}
+
+function practiceItemKey(item) {
+  return item.id || `${item.question_type || item.type}-${item.question}`;
 }
 
 function tabFromQuery(tab) {

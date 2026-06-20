@@ -29,6 +29,7 @@ from app.services.mastery_service import (
     classify_error_type,
     mastery_delta,
 )
+from app.utils.time import ensure_utc, utc_now
 
 
 DEMO_USER_ID = "demo-user"
@@ -349,7 +350,7 @@ def create_review_plan(
 ) -> dict:
     user_id = _resolve_user_id(db, course_id, user_id)
     sync_course_knowledge_points(db, course_id, user_id=user_id)
-    today = date.today()
+    today = utc_now().date()
     days_left = max(1, (payload.exam_date - today).days)
     points = _select_plan_points(db, course_id, payload.goals, user_id)
     if not points:
@@ -362,7 +363,7 @@ def create_review_plan(
         plan_day = today + timedelta(days=index // slots_per_day)
         point = points[index % len(points)]
         difficulty = "mistake" if point["mastery_score"] < 55 else "exam"
-        deadline = datetime.combine(plan_day, time(hour=21, minute=30))
+        deadline = ensure_utc(datetime.combine(plan_day, time(hour=21, minute=30)))
         title = f"复习{point['name']}并完成{DIFFICULTY_LABELS[difficulty]}"
         description = _plan_description(point, difficulty, payload.daily_minutes)
         task = _get_or_create_review_task(
@@ -407,7 +408,7 @@ def update_review_task_status(
         knowledge_status = _ensure_status(db, course_id, task.knowledge_point_id, user_id)
         knowledge_status.mastery_score = min(100.0, knowledge_status.mastery_score + 6)
         knowledge_status.review_count += 1
-        knowledge_status.last_review_time = datetime.utcnow()
+        knowledge_status.last_review_time = utc_now()
     db.commit()
     point_name = ""
     if task.knowledge_point_id:
@@ -724,7 +725,7 @@ def _status_payload(db: Session, point: KnowledgePoint, status: UserKnowledgeSta
 def _decayed_mastery(status: UserKnowledgeStatus) -> float:
     score = status.mastery_score
     if status.last_review_time:
-        days = max(0, (datetime.utcnow() - status.last_review_time).days - 3)
+        days = max(0, (utc_now() - ensure_utc(status.last_review_time)).days - 3)
         score -= min(18, days * 1.2)
     return round(max(0.0, min(100.0, score)), 1)
 
@@ -810,7 +811,7 @@ def _create_wrong_task(
     difficulty: str,
     user_id: str,
 ) -> None:
-    deadline = datetime.utcnow() + timedelta(days=1)
+    deadline = utc_now() + timedelta(days=1)
     title = f"错题复盘：{point.name}"
     description = (
         f"错因：{error_reason}。建议回看资料 P{point.source_page or '-'}，"

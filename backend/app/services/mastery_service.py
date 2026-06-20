@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models.entities import KnowledgePoint, QuestionAttempt, UserKnowledgeStatus
+from app.utils.time import ensure_utc, utc_now
 
 
 INITIAL_MASTERY = 60.0
@@ -244,4 +245,4 @@ def build_recent_attempts_summary(attempts: list[QuestionAttempt]) -> str:
 def _age_days(created_at: datetime | None) -> int:
     if created_at is None:
         return 0
-    return max(0, (datetime.utcnow() - created_at).days)
+    return max(0, (utc_now() - ensure_utc(created_at)).days)

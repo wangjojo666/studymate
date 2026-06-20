@@ -22,6 +22,8 @@ from app.models.entities import (
     UserKnowledgeStatus,
 )
 from app.schemas import CourseCreate
+from app.services.embedding_service import embedding_provider_label
+from app.services.reindex_service import reindex_course
 from app.services.vector_store import delete_course_index
 
 
@@ -106,6 +108,22 @@ def get_course(
     return payload
 
 
+@router.post("/{course_id}/reindex")
+def reindex_course_index(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.user_id == current_user.id)
+        .first()
+    )
+    if course is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    return reindex_course(db, course_id)
+
+
 @router.delete("/{course_id}")
 def delete_course(
     course_id: int,
@@ -134,6 +152,7 @@ def _course_payload(course: Course, document_count: int, chunk_count: int) -> di
         "description": course.description,
         "document_count": document_count,
         "chunk_count": chunk_count,
+        "embedding_provider": embedding_provider_label(),
         "last_asked_at": course.last_asked_at,
         "created_at": course.created_at,
         "updated_at": course.updated_at,
