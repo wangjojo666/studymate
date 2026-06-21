@@ -79,6 +79,29 @@ npm run dev
 http://127.0.0.1:5173
 ```
 
+### Docker Compose
+
+默认 Docker 配置使用 `TEXT_LLM_PROVIDER=mock` 和 `EMBEDDING_PROVIDER=hash`，不需要外部 API key，适合本地演示和答辩预览。
+
+```powershell
+cd D:\sunny\studymate
+docker compose up --build
+```
+
+访问：
+
+```text
+http://127.0.0.1:8080
+```
+
+后端数据和上传文件挂载在：
+
+```text
+backend/storage
+```
+
+首次部署前请复制并检查 `.env.production.example`，至少替换 `AUTH_SECRET_KEY`。如需接入真实模型，再修改对应 provider、base URL 和 key。
+
 ## 关键配置
 
 ```env
@@ -88,10 +111,17 @@ RAG_TOP_K=5
 RAG_MIN_SCORE=0.12
 RAG_CONTEXT_MAX_CHARS=6000
 RAG_ENABLE_STRICT_SOURCE_MODE=true
+RERANK_PROVIDER=rule
 CPP_RUN_ENABLED=false
+CPP_RUN_SANDBOX=none
 CPP_COMPILE_TIMEOUT_SECONDS=8
 CPP_RUN_TIMEOUT_SECONDS=5
+RATE_LIMIT_ENABLED=true
 ```
+
+### 检索后端透明度
+
+后端提供 `GET /api/health/detail` 查看检索后端状态，包括 `chroma_available`、`embedding_provider`、`fallback_search`、`active_backend` 和 `search_order`。如果 Chroma 未安装、初始化失败或查询失败，系统会降级到 SQLite sparse search。默认 `hash` embedding 和 SQLite sparse search 只用于稳定演示检索链路，不能宣传成真实语义向量库或生产级检索能力。
 
 `RAG_ENABLE_STRICT_SOURCE_MODE=true` 时，如果最高检索分数低于 `RAG_MIN_SCORE`，后端不会调用 LLM，而是返回“资料中没有找到足够依据回答这个问题，请补充资料或换一个更贴近资料的问题。”
 
@@ -114,8 +144,6 @@ CPP_RUN_TIMEOUT_SECONDS=5
 | 课程资料上传 | `docs/images/course-workspace.png` | 已有示例图 |
 | 问答带来源 | `docs/images/qa-source.png` | 已有示例图 |
 | 学习画像 | `docs/images/learning-profile.png` | 已有示例图 |
-| PDF 报告 | `docs/images/pdf-report.png` | 待补截图，占位路径 |
-| C++ 代码分析 | `docs/images/cpp-analysis.png` | 待补截图，占位路径 |
 
 ## 文档
 
@@ -148,10 +176,20 @@ python scripts\smoke_test.py
 RAG 简单评估：
 
 ```powershell
-python scripts\rag_eval.py docs\rag_eval_cases.example.json
+python scripts\rag_eval.py docs\rag_eval_cases.example.json --output-dir rag_eval_reports
 ```
 
 运行前先把示例 JSON 中的 `course_id` 改成本地已上传资料的课程 ID。
+脚本会输出控制台 JSON，并生成 `rag_eval_report.json` 和 `rag_eval_report.html`。
+
+前端 E2E：
+
+```powershell
+cd D:\sunny\studymate\frontend
+npm run test:e2e
+```
+
+Playwright 会启动临时后端和前端，临时数据写入 `frontend/.e2e-storage`。
 
 ## 已知边界
 

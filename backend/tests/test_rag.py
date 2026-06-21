@@ -84,3 +84,33 @@ def test_low_confidence_question_refuses_to_answer(client, auth_helpers):
     assert payload["confidence"] == "low"
     assert payload["llm_provider"] == "system"
     assert "没有找到足够依据" in payload["answer"]
+
+
+def test_answer_verification_downgrades_unsupported_generated_answer(client, auth_helpers, monkeypatch):
+    from app.services.llm_service import LlmResponse
+
+    course = auth_helpers.create_course("RAG Verification")
+    uploaded = auth_helpers.upload_text_file(
+        course["id"],
+        "Virtual functions enable runtime polymorphism through dynamic dispatch and overriding.",
+    )
+    auth_helpers.wait_document_done(course["id"], uploaded["id"])
+    monkeypatch.setattr(
+        "app.services.rag_service.call_llm",
+        lambda _messages: LlmResponse(
+            content="Photosynthesis depends on chlorophyll inside plant leaves.",
+            used_provider="fake/test",
+        ),
+    )
+
+    response = client.post(
+        f"/api/courses/{course['id']}/ask",
+        json={"question": "Why do virtual functions support runtime polymorphism?", "top_k": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_status"] == "low_confidence"
+    assert payload["confidence"] == "low"
+    assert "没有找到足够依据" in payload["answer"]
+    assert payload["sources"]

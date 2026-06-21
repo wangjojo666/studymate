@@ -16,6 +16,7 @@ from app.models.entities import (
     DocumentChunk,
     GeneratedMaterial,
     OcrJob,
+    ProcessingJob,
     QuestionAttempt,
     ReviewTask,
     User,
@@ -23,6 +24,14 @@ from app.models.entities import (
 )
 from app.schemas import CourseCreate
 from app.services.embedding_service import embedding_provider_label
+from app.services.processing_jobs import (
+    complete_processing_job,
+    create_processing_job,
+    fail_processing_job,
+    latest_jobs_by_document,
+    processing_job_payload,
+    start_processing_job,
+)
 from app.services.reindex_service import reindex_course
 from app.services.vector_store import delete_course_index
 
@@ -92,9 +101,18 @@ def get_course(
         .order_by(Document.created_at.desc())
         .all()
     )
+    jobs = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.course_id == course_id, ProcessingJob.document_id.isnot(None))
+        .order_by(ProcessingJob.created_at.desc())
+        .all()
+    )
+    latest_jobs = latest_jobs_by_document(jobs)
     chunk_count = db.query(func.count(DocumentChunk.id)).filter(DocumentChunk.course_id == course_id).scalar() or 0
     payload = _course_payload(course, len(documents), chunk_count)
-    payload["documents"] = [_document_payload(document) for document in documents]
+    payload["documents"] = [
+        _document_payload(document, latest_jobs.get(document.id)) for document in documents
+    ]
     payload["recent_messages"] = [
         _chat_message_payload(message)
         for message in (
@@ -121,7 +139,27 @@ def reindex_course_index(
     )
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
-    return reindex_course(db, course_id)
+    job = create_processing_job(
+        db,
+        course_id=course_id,
+        document_id=None,
+        job_type="reindex",
+        error_message="课程重新索引任务已创建。",
+    )
+    db.commit()
+    try:
+        start_processing_job(db, job, stage="reindexing", progress=10, message="正在重新索引课程知识库。")
+        result = reindex_course(db, course_id)
+        complete_processing_job(db, job, stage="completed", message="课程重新索引完成。")
+        db.commit()
+        db.refresh(job)
+        result["job"] = processing_job_payload(job)
+        return result
+    except Exception as exc:  # noqa: BLE001 - keep failure retryable through ProcessingJob.
+        message = str(exc).strip()[:500] or "重新索引失败，请稍后重试。"
+        fail_processing_job(db, job, stage="failed", message=message)
+        db.commit()
+        raise HTTPException(status_code=500, detail=message) from exc
 
 
 @router.delete("/{course_id}")
@@ -159,8 +197,8 @@ def _course_payload(course: Course, document_count: int, chunk_count: int) -> di
     }
 
 
-def _document_payload(document: Document) -> dict:
-    return {
+def _document_payload(document: Document, latest_job: ProcessingJob | None = None) -> dict:
+    payload = {
         "id": document.id,
         "course_id": document.course_id,
         "original_filename": document.original_filename,
@@ -175,6 +213,8 @@ def _document_payload(document: Document) -> dict:
         "updated_at": document.updated_at,
         "indexed_at": document.indexed_at,
     }
+    payload["latest_job"] = processing_job_payload(latest_job, document) if latest_job else None
+    return payload
 
 
 def _chat_message_payload(message: ChatMessage) -> dict:
@@ -237,5 +277,6 @@ def _delete_course_dependents(db: Session, course_id: int) -> None:
         UserKnowledgeStatus,
         ChunkKnowledgePoint,
         OcrJob,
+        ProcessingJob,
     ):
         db.query(model).filter(model.course_id == course_id).delete(synchronize_session=False)

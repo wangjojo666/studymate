@@ -34,7 +34,7 @@
 
 ```powershell
 cd D:\sunny\studymate
-python scripts\rag_eval.py docs\rag_eval_cases.example.json
+python scripts\rag_eval.py docs\rag_eval_cases.example.json --output-dir rag_eval_reports
 ```
 
 默认脚本会用演示账号登录：
@@ -63,11 +63,25 @@ python scripts\rag_eval.py docs\rag_eval_cases.example.json
 
 - `answer_status`：`answered` 表示证据足够；`low_confidence` 表示证据不足已拒答。
 - `confidence`：由最高检索分数粗略映射为 high/medium/low。
+- `provider` / `llm_provider`：回答生成链路。
+- `retrieval_provider`：检索链路；默认可能包含 `+rerank/rule`。
+- `elapsed_ms`：单个问题端到端耗时。
 - `top_sources`：查看文件名、页码、chunk、score、preview。
 - `keyword_hit`：答案是否覆盖期望关键词。
 - `source_hint_hit`：来源片段是否命中预期提示词。
 
 如果 `answer_status=low_confidence`，这是预期安全行为：系统没有找到足够证据，不应硬编答案。
+
+脚本会同时生成：
+
+- `rag_eval_report.json`：完整结构化结果，适合留档或比较。
+- `rag_eval_report.html`：简单表格报告，适合答辩展示。
+
+也可以指定输出文件：
+
+```powershell
+python scripts\rag_eval.py docs\rag_eval_cases.example.json --json-out reports\rag.json --html-out reports\rag.html
+```
 
 ## 默认 hash embedding 的限制
 

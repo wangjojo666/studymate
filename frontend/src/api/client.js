@@ -1,7 +1,9 @@
 import axios from "axios";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+
 const http = axios.create({
-  baseURL: "/api",
+  baseURL: API_BASE_URL,
   timeout: 600000
 });
 
@@ -37,7 +39,13 @@ export function getAuthToken() {
 
 export function getStoredUser() {
   const raw = window.localStorage.getItem(USER_KEY);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    window.localStorage.removeItem(USER_KEY);
+    return null;
+  }
 }
 
 export function setAuthSession(payload) {
@@ -104,6 +112,21 @@ export async function reindexCourse(courseId) {
 
 export async function reindexDocument(courseId, documentId) {
   const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/reindex`);
+  return data;
+}
+
+export async function getProcessingJobs(courseId) {
+  const { data } = await http.get(`/courses/${courseId}/jobs`);
+  return data;
+}
+
+export async function retryProcessingJob(courseId, jobId) {
+  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/retry`);
+  return data;
+}
+
+export async function cancelProcessingJob(courseId, jobId) {
+  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/cancel`);
   return data;
 }
 

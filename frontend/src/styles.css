@@ -733,6 +733,36 @@ textarea {
   gap: 10px;
 }
 
+.job-line {
+  color: var(--text-sub);
+}
+
+.job-history {
+  display: grid;
+  gap: 12px;
+}
+
+.job-history-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.job-history-item > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.job-history-item span,
+.job-history-item small {
+  color: var(--text-sub);
+}
+
 .document-item {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;

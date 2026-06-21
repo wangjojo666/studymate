@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta
 from itertools import combinations
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.entities import (
@@ -611,9 +612,20 @@ def _get_or_create_knowledge_point(
         source_page=source_page,
         evidence=evidence,
     )
-    db.add(point)
-    db.flush()
-    return point
+    try:
+        with db.begin_nested():
+            db.add(point)
+            db.flush()
+            return point
+    except IntegrityError:
+        point = (
+            db.query(KnowledgePoint)
+            .filter(KnowledgePoint.course_id == course_id, KnowledgePoint.name == normalized)
+            .first()
+        )
+        if point:
+            return point
+        raise
 
 
 def _link_chunk_to_point(db: Session, course_id: int, chunk_id: int, point_id: int) -> None:

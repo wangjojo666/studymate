@@ -69,6 +69,29 @@ class Document(Base):
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
+    processing_jobs: Mapped[list["ProcessingJob"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), index=True, nullable=True)
+    job_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(60), default="queued", index=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    document: Mapped[Document | None] = relationship(back_populates="processing_jobs")
 
 
 class DocumentChunk(Base):

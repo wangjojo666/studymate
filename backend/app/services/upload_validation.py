@@ -3,6 +3,8 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
+from app.config import settings
+
 
 class UploadValidationError(ValueError):
     pass
@@ -45,12 +47,31 @@ def _validate_office_zip(path: Path, suffix: str) -> None:
     expected_prefix = "word/" if suffix == ".docx" else "ppt/"
     try:
         with zipfile.ZipFile(path) as archive:
-            names = set(archive.namelist())
+            infos = archive.infolist()
+            _validate_zip_limits(infos)
+            names = {info.filename for info in infos}
     except zipfile.BadZipFile as exc:
         raise UploadValidationError("Office 文档无法打开，请确认文件没有损坏。") from exc
     if "[Content_Types].xml" not in names or not any(name.startswith(expected_prefix) for name in names):
         label = "Word" if suffix == ".docx" else "PowerPoint"
         raise UploadValidationError(f"这不是有效的 {label} 文档，请确认文件类型与扩展名一致。")
+
+
+def _validate_zip_limits(infos: list[zipfile.ZipInfo]) -> None:
+    if len(infos) > settings.office_zip_max_files:
+        raise UploadValidationError(
+            f"Office 文档内部文件数量过多（{len(infos)} 个），可能是异常压缩包，请重新导出后上传。"
+        )
+    total_uncompressed = 0
+    for info in infos:
+        normalized_name = info.filename.replace("\\", "/")
+        if normalized_name.startswith("/") or ".." in normalized_name.split("/"):
+            raise UploadValidationError("Office 文档包含异常路径，请重新导出后上传。")
+        if info.file_size > settings.office_zip_max_member_bytes:
+            raise UploadValidationError("Office 文档内部存在过大的单个文件，可能导致解压资源耗尽。")
+        total_uncompressed += int(info.file_size)
+        if total_uncompressed > settings.office_zip_max_total_uncompressed_bytes:
+            raise UploadValidationError("Office 文档解压后体积过大，可能是异常压缩包，请压缩内容后重试。")
 
 
 def _validate_jpeg(path: Path) -> None:

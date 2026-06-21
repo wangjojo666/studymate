@@ -38,6 +38,7 @@ def init_database() -> None:
         GeneratedMaterial,
         KnowledgePoint,
         OcrJob,
+        ProcessingJob,
         QuestionAttempt,
         ReviewTask,
         User,
@@ -51,6 +52,7 @@ def init_database() -> None:
         demo_user = _get_or_create_demo_user(db)
         _claim_legacy_user_rows(db, demo_user.id)
         _mark_interrupted_ocr_jobs(db)
+        _mark_interrupted_processing_jobs(db)
         if db.query(Course).count() == 0:
             db.add_all(
                 [
@@ -138,4 +140,19 @@ def _mark_interrupted_ocr_jobs(db: Session) -> None:
         if document:
             document.status = "indexed" if document.chunk_count else "needs_ocr"
             document.error_message = job.error_message
+    db.commit()
+
+
+def _mark_interrupted_processing_jobs(db: Session) -> None:
+    from app.models.entities import ProcessingJob
+
+    jobs = db.query(ProcessingJob).filter(ProcessingJob.status.in_(("queued", "running"))).all()
+    if not jobs:
+        return
+    for job in jobs:
+        job.status = "failed"
+        job.stage = "interrupted"
+        job.progress = 100
+        job.finished_at = utc_now()
+        job.error_message = "任务因服务重启已中断，请重试该任务。"
     db.commit()

@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - ./.env.production.example
+    environment:
+      DATABASE_URL: sqlite:////app/storage/studymate.db
+      STORAGE_DIR: /app/storage
+      UPLOAD_DIR: /app/storage/uploads
+      CHROMA_DIR: /app/storage/chroma
+      TEXT_LLM_PROVIDER: mock
+      EMBEDDING_PROVIDER: hash
+      OCR_LLM_PROVIDER: mock
+      CPP_RUN_ENABLED: "false"
+    volumes:
+      - ./backend/storage:/app/storage
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"

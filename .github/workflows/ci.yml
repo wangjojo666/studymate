@@ -24,13 +24,34 @@ jobs:
           python-version: "3.11"
 
       - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements.txt
+        working-directory: backend
+        run: python -m pip install -r requirements.txt
 
       - name: Run backend tests
-        run: python -m pytest backend/tests -q
+        working-directory: backend
+        run: python -m pytest tests -q
+
+      - name: Validate Alembic migrations on empty SQLite database
+        working-directory: backend
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/studymate-alembic.db
+          STORAGE_DIR: ${{ runner.temp }}/studymate-storage
+          UPLOAD_DIR: ${{ runner.temp }}/studymate-storage/uploads
+          CHROMA_DIR: ${{ runner.temp }}/studymate-storage/chroma
+        run: python -m alembic upgrade head
 
   frontend:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: development
+      TEXT_LLM_PROVIDER: mock
+      TEXT_LLM_FALLBACK_PROVIDER: none
+      OCR_LLM_PROVIDER: mock
+      EMBEDDING_PROVIDER: hash
+      EMBEDDING_DIMENSION: "384"
+      RERANK_PROVIDER: rule
+      CPP_RUN_ENABLED: "false"
+      RATE_LIMIT_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
 
@@ -38,10 +59,40 @@ jobs:
         with:
           node-version: "20"
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
+
+      - name: Audit production frontend dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+
+      - name: Prepare E2E backend virtualenv
+        run: node frontend/scripts/start-e2e-backend.mjs --prepare
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run frontend E2E
+        working-directory: frontend
+        run: npm run test:e2e
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config
+
+      - name: Build Docker images
+        run: docker compose build

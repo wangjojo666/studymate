@@ -148,6 +148,17 @@ def retrieval_provider_from_results(results: list[SearchResult]) -> str:
     return results[0].retrieval_provider
 
 
+def retrieval_backend_status() -> dict:
+    chroma_available = _get_chroma_collection() is not None
+    return {
+        "chroma_available": chroma_available,
+        "embedding_provider": embedding_provider_label(),
+        "fallback_search": "sqlite_sparse",
+        "active_backend": "chroma" if chroma_available else "sqlite_sparse",
+        "search_order": ["chroma", "sqlite_sparse"] if chroma_available else ["sqlite_sparse"],
+    }
+
+
 def delete_chunks_from_index(chunk_ids: list[int]) -> None:
     if not chunk_ids:
         return

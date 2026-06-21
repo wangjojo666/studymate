@@ -12,6 +12,24 @@ Authorization: Bearer <access_token>
 
 `GET /health`
 
+`GET /health/detail`
+
+返回运行状态和检索后端透明度信息。`chroma_available=false` 表示当前没有使用 Chroma，问答会降级到 SQLite sparse search；默认 `hash` embedding 和 SQLite sparse search 只适合演示检索链路，不等同于真实语义向量检索。
+
+```json
+{
+  "status": "ok",
+  "name": "StudyMate",
+  "retrieval": {
+    "chroma_available": false,
+    "embedding_provider": "hash/384d",
+    "fallback_search": "sqlite_sparse",
+    "active_backend": "sqlite_sparse",
+    "search_order": ["sqlite_sparse"]
+  }
+}
+```
+
 ## Auth
 
 `POST /auth/register`
@@ -150,6 +168,46 @@ Authorization: Bearer <access_token>
 
 删除单个资料，同时删除对应 `DocumentChunk`、`ChunkKnowledgePoint`、OCR 任务和本地上传文件。若知识点来源于该资料，会清空来源信息但保留学习画像中的知识点记录。
 
+## Processing Jobs
+
+资料解析、OCR、重新索引和知识点同步都会写入统一任务表。旧的资料状态字段仍然保留，课程详情中的每个资料会额外返回 `latest_job`。
+
+`GET /courses/{course_id}/jobs`
+
+返回当前登录用户拥有课程下的最近任务，按创建时间倒序：
+
+```json
+[
+  {
+    "id": 12,
+    "course_id": 1,
+    "document_id": 3,
+    "job_type": "document_parse",
+    "status": "completed",
+    "stage": "indexed",
+    "progress": 100,
+    "error_message": "",
+    "started_at": "2026-06-20T10:00:00",
+    "finished_at": "2026-06-20T10:00:03",
+    "created_at": "2026-06-20T10:00:00",
+    "updated_at": "2026-06-20T10:00:03",
+    "document": {
+      "id": 3,
+      "original_filename": "notes.txt",
+      "status": "indexed"
+    }
+  }
+]
+```
+
+`POST /courses/{course_id}/jobs/{job_id}/retry`
+
+仅失败或已取消任务可重试。会按 `job_type` 重新触发原逻辑：`document_parse`、`ocr`、`reindex`、`knowledge_sync`。
+
+`POST /courses/{course_id}/jobs/{job_id}/cancel`
+
+取消排队或运行中的任务。OCR 会主动停止；解析和重新索引任务会标记取消，已经写入的处理结果保留。
+
 `POST /courses/{course_id}/documents/{document_id}/vision`
 
 对图片课件重新执行视觉识别并入库。图片上传时会自动尝试识别；如果本地视觉模型未启动，资料会保留为 `needs_vision`，可稍后调用此接口重试。
@@ -168,6 +226,8 @@ Authorization: Bearer <access_token>
 ```
 
 ## RAG Question Answering
+
+默认检索顺序是：Chroma 可用时优先使用 Chroma；Chroma 未安装、初始化失败或查询失败时，自动降级为 SQLite sparse search。可以通过 `GET /health/detail` 查看当前是否真的连上 Chroma。默认 `hash` embedding 是稳定演示兜底，不是深度语义 embedding；SQLite sparse search 是关键词/稀疏权重检索，不应宣传成生产级向量库能力。
 
 资料入库时会生成本地 embedding 并写入 Chroma 持久化 collection；如果环境没有安装 Chroma，后端会自动降级到 SQLite 稀疏向量检索，响应结构保持一致。
 
@@ -206,12 +266,13 @@ Authorization: Bearer <access_token>
 `answer_status` 可能是：
 
 - `answered`: 已基于资料回答。
-- `low_confidence`: 检索分数不足，已拒答。
+- `low_confidence`: 检索分数不足，或回答生成后来源校验不足，已拒答。
 - `empty_knowledge_base`: 当前课程没有可检索知识库。
 - `processing`: 资料仍在解析入库。
 - `needs_ocr`: 资料需要 OCR 后才能检索。
 
 `provider` / `llm_provider` 会返回后端实际使用的链路，例如 `mock/offline`、`deepseek/deepseek-v4-flash` 或 `ollama/qwen3-vl:30b`。当低置信拒答时，`llm_provider` 为 `system`，表示没有调用 LLM。
+`retrieval_provider` 可能带有 `+rerank/rule` 后缀，表示启用了默认规则 rerank。若配置 `RERANK_PROVIDER=none`，则不启用 rerank。
 
 ## Review Outline
 

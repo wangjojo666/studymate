@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings, validate_runtime_settings
 from app.database import init_database
+from app.middleware.rate_limit import InMemoryRateLimitMiddleware
 from app.routers import assistant, auth, courses, cpp_tools, documents, learning
+from app.services.vector_store import retrieval_backend_status
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -23,6 +25,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
+app.add_middleware(InMemoryRateLimitMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
@@ -34,6 +38,7 @@ app.add_middleware(
 app.include_router(courses.router, prefix=settings.api_prefix)
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(documents.router, prefix=settings.api_prefix)
+app.include_router(documents.jobs_router, prefix=settings.api_prefix)
 app.include_router(assistant.router, prefix=settings.api_prefix)
 app.include_router(learning.router, prefix=settings.api_prefix)
 app.include_router(cpp_tools.router, prefix=settings.api_prefix)
@@ -51,3 +56,12 @@ def root() -> dict:
 @app.get(f"{settings.api_prefix}/health")
 def health() -> dict:
     return {"status": "ok", "name": settings.app_name}
+
+
+@app.get(f"{settings.api_prefix}/health/detail")
+def health_detail() -> dict:
+    return {
+        "status": "ok",
+        "name": settings.app_name,
+        "retrieval": retrieval_backend_status(),
+    }
