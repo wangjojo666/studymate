@@ -5,11 +5,29 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.entities import Document, ProcessingJob
+from app.models.entities import Document, OcrJob, ProcessingJob
 from app.utils.time import utc_now
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+ACTIVE_STATUSES = {"queued", "running"}
+ACTIVE_DOCUMENT_STATUSES = {
+    "queued",
+    "uploaded",
+    "parsing",
+    "chunking",
+    "indexing",
+    "syncing_knowledge_points",
+    "ocr_queued",
+    "ocr_processing",
+    "vision_processing",
+}
+CANCEL_MARKED_MESSAGE = (
+    "任务已标记取消；FastAPI BackgroundTasks 不能强制中断已开始的工作，已写入结果会保留。"
+)
+INTERRUPTED_JOB_MESSAGE = (
+    "服务进程已重启，FastAPI BackgroundTasks 不会自动恢复该任务；请确认已写入结果后手动重试。"
+)
 
 
 def create_processing_job(
@@ -122,7 +140,7 @@ def cancel_processing_job(
     db: Session,
     job: ProcessingJob,
     *,
-    message: str = "任务已取消。",
+    message: str = CANCEL_MARKED_MESSAGE,
 ) -> ProcessingJob:
     if job.status not in TERMINAL_STATUSES:
         job.status = "cancelled"
@@ -132,6 +150,39 @@ def cancel_processing_job(
         job.finished_at = utc_now()
         db.flush()
     return job
+
+
+def recover_interrupted_processing_jobs(db: Session) -> int:
+    """Mark in-memory BackgroundTasks left behind by a process restart as retryable failures."""
+    recovered = 0
+    now = utc_now()
+    jobs = db.query(ProcessingJob).filter(ProcessingJob.status.in_(ACTIVE_STATUSES)).all()
+    for job in jobs:
+        job.status = "failed"
+        job.stage = "interrupted"
+        job.progress = 100
+        job.error_message = INTERRUPTED_JOB_MESSAGE
+        job.started_at = job.started_at or job.created_at or now
+        job.finished_at = now
+        _mark_document_interrupted(db, job)
+        recovered += 1
+
+    ocr_jobs = db.query(OcrJob).filter(OcrJob.status.in_(ACTIVE_STATUSES)).all()
+    for ocr_job in ocr_jobs:
+        ocr_job.status = "failed"
+        ocr_job.error_message = INTERRUPTED_JOB_MESSAGE
+        ocr_job.finished_at = now
+        document = db.get(Document, ocr_job.document_id)
+        if document and document.status in ACTIVE_DOCUMENT_STATUSES:
+            document.status = "needs_ocr"
+            document.processing_stage = "interrupted"
+            document.processing_progress = 100
+            document.error_message = INTERRUPTED_JOB_MESSAGE
+        recovered += 1
+
+    if recovered:
+        db.flush()
+    return recovered
 
 
 def reset_failed_processing_job(db: Session, job: ProcessingJob) -> ProcessingJob:
@@ -203,3 +254,24 @@ def _document_summary(document: Document) -> dict:
 
 def _clamp_progress(value: int) -> int:
     return max(0, min(100, int(value)))
+
+
+def _mark_document_interrupted(db: Session, job: ProcessingJob) -> None:
+    if job.document_id is None:
+        return
+    document = db.get(Document, job.document_id)
+    if document is None or document.status not in ACTIVE_DOCUMENT_STATUSES:
+        return
+    if job.job_type == "ocr":
+        document.status = "needs_ocr"
+    elif job.job_type == "document_parse":
+        document.status = "failed"
+    elif job.job_type == "knowledge_sync":
+        document.status = "indexed" if document.chunk_count else "failed"
+    elif job.job_type == "reindex":
+        document.status = "indexed" if document.chunk_count else "failed"
+    else:
+        document.status = "failed"
+    document.processing_stage = "interrupted"
+    document.processing_progress = 100
+    document.error_message = INTERRUPTED_JOB_MESSAGE

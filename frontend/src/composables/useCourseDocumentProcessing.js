@@ -107,7 +107,7 @@ export function useCourseDocumentProcessing({ courseId, course, loadCourse }) {
       stopOcrPolling();
       ocrRunningId.value = null;
       await refreshCourseAndJobs();
-      ElMessage.success(latest.error_message || "OCR 已停止");
+      ElMessage.info(latest.error_message || "OCR 已标记取消，已开始的页面处理可能继续到下一次检查");
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error, "停止 OCR 失败"));
     }
@@ -212,8 +212,8 @@ export function useCourseDocumentProcessing({ courseId, course, loadCourse }) {
 
   async function cancelJob(job) {
     try {
-      await cancelProcessingJob(unref(courseId), job.id);
-      ElMessage.success("任务已取消");
+      const updated = await cancelProcessingJob(unref(courseId), job.id);
+      ElMessage.info(updated.error_message || "任务已标记取消，已开始的后台工作可能继续");
       await refreshCourseAndJobs();
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error, "任务取消失败"));

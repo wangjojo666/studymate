@@ -43,6 +43,7 @@ CPP_RUN_SANDBOX=docker
 ```
 
 当前版本只记录该配置边界，不默认启用 Docker 运行沙箱。
+代码层面会拒绝 `CPP_RUN_SANDBOX=docker`，因为当前没有真实 Docker 沙箱实现；`APP_ENV=production` 下也会拒绝 `CPP_RUN_ENABLED=true`。
 
 ## Token 与 localStorage
 
@@ -52,6 +53,14 @@ CPP_RUN_SANDBOX=docker
 - 更严格的 token 生命周期。
 - HttpOnly/SameSite Cookie 或更完善的前端安全策略。
 - XSS 防护和内容安全策略。
+
+后端当前使用 HMAC token，`APP_ENV=production` 会拒绝默认开发密钥、示例占位密钥和过短密钥。这只消除了明显错误配置，不代表已经具备生产级身份认证能力。
+
+## BackgroundTasks 边界
+
+资料解析、OCR、重新索引和知识点同步仍基于 FastAPI `BackgroundTasks` 或同步请求执行，不是可靠任务队列。服务进程重启后，内存中的 queued/running 任务不会自动恢复；启动恢复逻辑会把这些任务标记为失败，并提示用户确认结果后手动重试。
+
+取消任务也是状态标记：OCR 会在处理循环下一次检查时尽量停止；资料解析、重新索引和知识点同步不能强制中断已经开始的工作，已经写入的结果会保留。生产化需要 Celery/RQ/Arq 等队列、幂等任务设计、任务租约、心跳、去重键和可观测性。
 
 ## SQLite 边界
 

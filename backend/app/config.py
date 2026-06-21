@@ -6,6 +6,12 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_AUTH_SECRET_KEY = "studymate-dev-secret-change-me"
+MIN_PRODUCTION_AUTH_SECRET_LENGTH = 32
+PLACEHOLDER_AUTH_SECRET_KEYS = {
+    DEFAULT_AUTH_SECRET_KEY,
+    "replace-with-a-long-random-production-secret",
+}
 
 try:
     from dotenv import load_dotenv
@@ -97,7 +103,7 @@ class Settings:
     office_zip_max_total_uncompressed_bytes: int = int(
         os.getenv("OFFICE_ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES", str(200 * 1024 * 1024))
     )
-    auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", "studymate-dev-secret-change-me")
+    auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", DEFAULT_AUTH_SECRET_KEY)
     auth_token_expire_minutes: int = int(os.getenv("AUTH_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
     demo_user_email: str = os.getenv("DEMO_USER_EMAIL", "demo@studymate.local")
     demo_user_password: str = os.getenv("DEMO_USER_PASSWORD", "studymate-demo")
@@ -122,5 +128,28 @@ settings = Settings()
 
 
 def validate_runtime_settings() -> None:
-    if settings.app_env == "production" and settings.auth_secret_key == "studymate-dev-secret-change-me":
-        raise RuntimeError("APP_ENV=production 时必须修改 AUTH_SECRET_KEY，不能使用默认开发密钥。")
+    errors: list[str] = []
+    if settings.app_env == "production" and _is_unsafe_production_secret(settings.auth_secret_key):
+        errors.append(
+            "APP_ENV=production 时必须设置至少 "
+            f"{MIN_PRODUCTION_AUTH_SECRET_LENGTH} 个字符的随机 AUTH_SECRET_KEY，"
+            "不能使用默认开发密钥或示例占位值"
+        )
+    if settings.cpp_run_enabled and settings.cpp_run_sandbox != "none":
+        errors.append(
+            f"CPP_RUN_SANDBOX={settings.cpp_run_sandbox} 尚未实现，不能作为可用沙箱启动"
+        )
+    if settings.app_env == "production" and settings.cpp_run_enabled:
+        errors.append(
+            "APP_ENV=production 不允许 CPP_RUN_ENABLED=true：当前 C++ 执行只有临时目录和 timeout，不是真实沙箱"
+        )
+    if errors:
+        raise RuntimeError("；".join(errors))
+
+
+def _is_unsafe_production_secret(secret: str) -> bool:
+    normalized = (secret or "").strip()
+    return (
+        normalized in PLACEHOLDER_AUTH_SECRET_KEYS
+        or len(normalized) < MIN_PRODUCTION_AUTH_SECRET_LENGTH
+    )

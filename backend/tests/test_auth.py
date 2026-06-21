@@ -39,6 +39,7 @@ def test_duplicate_register_returns_409(unauthenticated_client):
     duplicate_response = unauthenticated_client.post("/api/auth/register", json=payload)
 
     assert duplicate_response.status_code == 409
+    assert duplicate_response.json()["detail"] == "账号已存在"
 
 
 def test_invalid_login_returns_401(unauthenticated_client):
@@ -56,3 +57,42 @@ def test_invalid_login_returns_401(unauthenticated_client):
     )
 
     assert login_response.status_code == 401
+    assert login_response.json()["detail"] == "账号或密码错误"
+
+
+def test_tampered_token_returns_401(client):
+    token = client.headers["Authorization"].split(" ", 1)[1]
+    tampered = f"{token[:-1]}{'a' if token[-1] != 'a' else 'b'}"
+
+    response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {tampered}"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "请先登录"
+
+
+def test_expired_token_returns_401(client):
+    from app.services import auth_service
+
+    header = {"alg": auth_service.TOKEN_ALGORITHM, "typ": "JWT"}
+    payload = {"sub": "1", "exp": 1}
+    signing_input = ".".join([auth_service._json_b64(header), auth_service._json_b64(payload)])
+    expired_token = f"{signing_input}.{auth_service._sign(signing_input)}"
+
+    response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {expired_token}"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "请先登录"
+
+
+def test_token_for_missing_user_returns_401(unauthenticated_client):
+    from app.services.auth_service import create_access_token
+
+    missing_user_token = create_access_token(999_999)
+
+    response = unauthenticated_client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {missing_user_token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "请先登录"

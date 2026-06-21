@@ -182,7 +182,10 @@ function issueTagType(level) {
 }
 
 function sandboxText(level) {
-  return level === "local_tempdir_timeout_only" ? "本地临时目录+超时" : "安全演示模式";
+  if (level === "local_tempdir_timeout_only") return "本地临时目录+超时";
+  if (level === "rejected_no_sandbox") return "生产环境拒绝本地执行";
+  if (String(level || "").startsWith("unsupported:")) return "沙箱配置不可用";
+  return "安全演示模式";
 }
 
 function compileTagType(analysis) {

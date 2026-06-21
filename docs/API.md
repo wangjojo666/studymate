@@ -158,11 +158,11 @@ Authorization: Bearer <access_token>
 
 `GET /courses/{course_id}/documents/{document_id}/ocr-jobs/{job_id}`
 
-查询 OCR 任务进度。`status` 可能是 `queued`、`running`、`completed`、`failed`。
+查询 OCR 任务进度。`status` 可能是 `queued`、`running`、`completed`、`failed`、`cancelled`。
 
 `POST /courses/{course_id}/documents/{document_id}/ocr-jobs/{job_id}/cancel`
 
-停止正在运行的 OCR 任务；已入库的页面片段会保留。
+标记取消正在运行的 OCR 任务；后台会在下一次检查时停止，已入库的页面片段会保留。
 
 `DELETE /courses/{course_id}/documents/{document_id}`
 
@@ -170,7 +170,7 @@ Authorization: Bearer <access_token>
 
 ## Processing Jobs
 
-资料解析、OCR、重新索引和知识点同步都会写入统一任务表。旧的资料状态字段仍然保留，课程详情中的每个资料会额外返回 `latest_job`。
+资料解析、OCR、重新索引和知识点同步都会写入统一任务表。旧的资料状态字段仍然保留，课程详情中的每个资料会额外返回 `latest_job`。当前实现基于 FastAPI `BackgroundTasks` 和同步请求，不是可靠队列；进程重启后仍处于 `queued`/`running` 的任务会被标记为 `failed`，`stage=interrupted`，并提示手动重试。
 
 `GET /courses/{course_id}/jobs`
 
@@ -206,7 +206,7 @@ Authorization: Bearer <access_token>
 
 `POST /courses/{course_id}/jobs/{job_id}/cancel`
 
-取消排队或运行中的任务。OCR 会主动停止；解析和重新索引任务会标记取消，已经写入的处理结果保留。
+取消排队或运行中的任务。OCR 会在后台循环下一次检查时停止；解析、重新索引和知识点同步任务只能标记取消，已开始的工作可能继续，已经写入的处理结果保留。
 
 `POST /courses/{course_id}/documents/{document_id}/vision`
 
@@ -339,7 +339,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-默认 `CPP_RUN_ENABLED=false`，只做规则分析，不执行本地编译运行。如果改为 `true`，`sandbox_level` 会变为 `local_tempdir_timeout_only`，表示仅有临时目录和超时限制，不是完整沙箱。
+默认 `CPP_RUN_ENABLED=false`，只做规则分析，不执行本地编译运行。开发环境改为 `true` 后，`sandbox_level` 会变为 `local_tempdir_timeout_only`，表示仅有临时目录和超时限制，不是完整沙箱。`APP_ENV=production` 下打开本地执行会被拒绝；`CPP_RUN_SANDBOX=docker` 当前未实现，也会被拒绝。
 
 ## Learning Diagnosis
 

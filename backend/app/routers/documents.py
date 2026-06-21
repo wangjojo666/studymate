@@ -25,6 +25,7 @@ from app.services.document_parser import parse_document
 from app.services.learning_service import sync_course_knowledge_points
 from app.services.ocr_service import ocr_pdf_with_qwen_vl
 from app.services.processing_jobs import (
+    CANCEL_MARKED_MESSAGE,
     cancel_processing_job,
     complete_processing_job,
     create_processing_job,
@@ -167,6 +168,7 @@ def delete_document(
         )
     else:
         delete_document_index(document_id)
+    db.query(ProcessingJob).filter(ProcessingJob.document_id == document_id).delete(synchronize_session=False)
     db.query(OcrJob).filter(OcrJob.document_id == document_id).delete(synchronize_session=False)
     db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete(
         synchronize_session=False
@@ -390,7 +392,7 @@ def cancel_ocr_job(
 
     job.status = "cancelled"
     job.finished_at = utc_now()
-    job.error_message = f"OCR 已停止，已保留 {job.processed_pages} 页识别结果。"
+    job.error_message = f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {job.processed_pages} 页识别结果。"
     document.status = "indexed" if document.chunk_count else "needs_ocr"
     document.processing_stage = document.status
     document.processing_progress = 100
@@ -444,6 +446,19 @@ def retry_processing_job(
         raise HTTPException(status_code=404, detail="任务关联的资料不存在")
     if job.job_type in {"document_parse", "ocr"} and document is None:
         raise HTTPException(status_code=400, detail="任务缺少关联资料，无法重试")
+    if _has_active_processing_job(db, job, document):
+        raise HTTPException(status_code=409, detail="同一资料或课程已有同类任务正在运行，请等待当前任务结束后再重试")
+    if job.job_type == "ocr" and document is not None:
+        running_ocr_job = (
+            db.query(OcrJob)
+            .filter(
+                OcrJob.document_id == document.id,
+                OcrJob.status.in_(("queued", "running")),
+            )
+            .first()
+        )
+        if running_ocr_job:
+            raise HTTPException(status_code=409, detail="该资料已有 OCR 任务正在运行，请等待当前任务结束后再重试")
 
     reset_failed_processing_job(db, job)
     db.commit()
@@ -486,7 +501,7 @@ def cancel_processing_job_endpoint(
     if job is None or job.course_id != course_id:
         raise HTTPException(status_code=404, detail="任务不存在")
     document = db.get(Document, job.document_id) if job.document_id else None
-    message = "任务已取消，已完成的处理结果会保留。"
+    message = CANCEL_MARKED_MESSAGE
 
     if job.job_type == "ocr":
         metadata = job_metadata(job)
@@ -495,7 +510,9 @@ def cancel_processing_job_endpoint(
         if legacy_job and legacy_job.status not in {"completed", "failed", "cancelled"}:
             legacy_job.status = "cancelled"
             legacy_job.finished_at = utc_now()
-            legacy_job.error_message = f"OCR 已停止，已保留 {legacy_job.processed_pages} 页识别结果。"
+            legacy_job.error_message = (
+                f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {legacy_job.processed_pages} 页识别结果。"
+            )
             message = legacy_job.error_message
             if document:
                 document.status = "indexed" if document.chunk_count else "needs_ocr"
@@ -694,7 +711,9 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
                 document.status = "indexed" if document.chunk_count else "needs_ocr"
                 document.processing_stage = document.status
                 document.processing_progress = 100
-                document.error_message = f"OCR 已停止，已保留 {job.processed_pages} 页识别结果。"
+                document.error_message = (
+                    f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {job.processed_pages} 页识别结果。"
+                )
                 job.error_message = document.error_message
                 cancel_processing_job(db, processing_job, message=document.error_message) if processing_job else None
                 db.commit()
@@ -908,6 +927,22 @@ def _get_owned_course(db: Session, course_id: int, user_id: int) -> Course | Non
         .filter(Course.id == course_id, Course.user_id == user_id)
         .first()
     )
+
+
+def _has_active_processing_job(db: Session, job: ProcessingJob, document: Document | None) -> bool:
+    query = db.query(ProcessingJob).filter(
+        ProcessingJob.course_id == job.course_id,
+        ProcessingJob.job_type == job.job_type,
+        ProcessingJob.status.in_(("queued", "running")),
+        ProcessingJob.id != job.id,
+    )
+    if document is not None:
+        query = query.filter(ProcessingJob.document_id == document.id)
+    elif job.document_id is None:
+        query = query.filter(ProcessingJob.document_id.is_(None))
+    else:
+        query = query.filter(ProcessingJob.document_id == job.document_id)
+    return query.first() is not None
 
 
 def _safe_filename(filename: str) -> str:

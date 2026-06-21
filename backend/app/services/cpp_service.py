@@ -237,12 +237,16 @@ def _compile_issues(compile_payload: dict) -> list[dict]:
     compile_result = compile_payload.get("compile_result", {})
     run_result = compile_payload.get("run_result", {})
     issues: list[dict] = []
-    if compile_payload.get("sandbox_level") == "disabled" or not compile_result.get("executed", True):
+    if not compile_result.get("executed", True):
+        title = "安全演示模式" if compile_payload.get("sandbox_level") == "disabled" else "未执行本地编译"
+        detail = compile_result.get("stderr")
+        if not detail and compile_payload.get("sandbox_level") == "disabled":
+            detail = "当前 CPP_RUN_ENABLED=false，系统只做规则分析，未执行本地 g++ 编译或样例运行。"
         issues.append(
             _issue(
                 "info",
-                "安全演示模式",
-                "当前 CPP_RUN_ENABLED=false，系统只做规则分析，未执行本地 g++ 编译或样例运行。",
+                title,
+                detail or "当前配置未执行本地 g++ 编译或样例运行。",
             )
         )
         return issues

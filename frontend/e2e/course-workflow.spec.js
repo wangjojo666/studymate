@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test";
 import fs from "node:fs/promises";
 
+test("unauthenticated course access redirects to login", async ({ page }) => {
+  await page.goto("/courses");
+
+  await expect(page).toHaveURL(/\/login\?redirect=.*courses/);
+  await expect(page.getByRole("button", { name: "登录" })).toBeVisible();
+});
+
 test("course study workflow", async ({ page }, testInfo) => {
   const courseName = `E2E C++ ${Date.now()}`;
   const notesPath = testInfo.outputPath("polymorphism-notes.txt");
@@ -54,3 +61,57 @@ test("course study workflow", async ({ page }, testInfo) => {
   await expect(page.getByRole("heading", { name: "总体掌握度" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "薄弱知识点" })).toBeVisible();
 });
+
+test("report export button triggers a PDF blob download", async ({ page }) => {
+  await loginAsDemo(page);
+  const course = await createCourseViaApi(page, `E2E Report ${Date.now()}`);
+
+  await page.goto("/reports");
+  await page.locator(".report-actions .el-select").click();
+  await page.locator(".el-select-dropdown__item").filter({ hasText: course.name }).click();
+  const exportButton = page.locator(".report-actions").getByRole("button", { name: "导出报告", exact: true });
+  await expect(exportButton).toBeEnabled();
+
+  const downloadPromise = page.waitForEvent("download");
+  await exportButton.click();
+  const download = await downloadPromise;
+
+  expect(download.suggestedFilename()).toMatch(/learning-report\.pdf$/);
+});
+
+test("cpp analysis shows local compile was not executed in disabled mode", async ({ page }) => {
+  await loginAsDemo(page);
+  const course = await createCourseViaApi(page, `E2E CPP Disabled ${Date.now()}`);
+
+  await page.goto(`/courses/${course.id}?tab=cpp`);
+  await page
+    .getByPlaceholder("可选：粘贴自己的答案，系统会判断可能的错误和遗漏考点")
+    .fill("#include <iostream>\nint main(){ std::cout << 1; return 0; }");
+  await page.getByRole("button", { name: "分析代码" }).click();
+
+  await expect(
+    page.getByRole("alert").getByText("当前处于安全演示模式，未执行本地编译运行。")
+  ).toBeVisible();
+  await expect(page.getByText("未执行本地编译命令")).toBeVisible();
+});
+
+async function loginAsDemo(page) {
+  await page.goto("/login");
+  await page.getByPlaceholder("demo@studymate.local").fill("demo@studymate.local");
+  await page.getByPlaceholder("studymate-demo").fill("studymate-demo");
+  await page.getByRole("button", { name: "登录" }).click();
+  await expect(page).toHaveURL(/\/$/);
+}
+
+async function createCourseViaApi(page, name) {
+  const token = await page.evaluate(() => window.localStorage.getItem("studymate_access_token"));
+  const response = await page.request.post("/api/courses", {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name,
+      description: "Playwright API seeded course"
+    }
+  });
+  expect(response.ok()).toBeTruthy();
+  return response.json();
+}

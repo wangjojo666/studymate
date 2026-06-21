@@ -5,6 +5,8 @@ services:
     env_file:
       - ./.env.production.example
     environment:
+      APP_ENV: development
+      AUTH_SECRET_KEY: studymate-compose-demo-secret-change-before-prod
       DATABASE_URL: sqlite:////app/storage/studymate.db
       STORAGE_DIR: /app/storage
       UPLOAD_DIR: /app/storage/uploads

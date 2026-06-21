@@ -101,6 +101,7 @@ backend/storage
 ```
 
 首次部署前请复制并检查 `.env.production.example`，至少替换 `AUTH_SECRET_KEY`。如需接入真实模型，再修改对应 provider、base URL 和 key。
+`APP_ENV=production` 会在启动时拒绝默认开发密钥、示例占位密钥和过短密钥。
 
 ## 关键配置
 
@@ -125,7 +126,11 @@ RATE_LIMIT_ENABLED=true
 
 `RAG_ENABLE_STRICT_SOURCE_MODE=true` 时，如果最高检索分数低于 `RAG_MIN_SCORE`，后端不会调用 LLM，而是返回“资料中没有找到足够依据回答这个问题，请补充资料或换一个更贴近资料的问题。”
 
-`CPP_RUN_ENABLED=false` 是默认安全演示模式。设置为 `true` 后会在本机临时目录调用 `g++`，仅有超时限制，不是完整沙箱。
+`CPP_RUN_ENABLED=false` 是默认安全演示模式。开发环境设置为 `true` 后会在本机临时目录调用 `g++`，仅有超时限制，不是完整沙箱。`APP_ENV=production` 下打开 `CPP_RUN_ENABLED=true` 会启动失败；`CPP_RUN_SANDBOX=docker` 当前没有实现，也会被拒绝，避免误以为已经有沙箱。
+
+### 认证边界
+
+当前访问 token 由后端 HMAC 签发，前端保存在 `localStorage`。这能支持课程设计演示的登录态和用户隔离，但仍是演示级边界，不等同于生产级认证体系；生产化需要 HTTPS、HttpOnly/SameSite Cookie、更短 token 生命周期、CSP/XSS 防护和审计。
 
 ## 答辩推荐话术
 
@@ -198,4 +203,6 @@ Playwright 会启动临时后端和前端，临时数据写入 `frontend/.e2e-st
 - 默认 mock/offline 不是大模型推理。
 - OCR 依赖本地视觉模型或外部工具，扫描版 PDF 效果受模型和机器性能影响。
 - C++ 本地执行默认关闭；即使开启，也只有临时目录和超时限制，不是安全沙箱。
+- FastAPI `BackgroundTasks` 不是可靠队列；进程重启后，未完成任务会标记为失败并提示手动重试。
+- 当前 token/localStorage 登录态只适合演示，不是生产级认证边界。
 - 学习诊断是可解释规则模型，不是医学/心理测量意义上的认知诊断。

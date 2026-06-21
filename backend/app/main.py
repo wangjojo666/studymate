@@ -7,9 +7,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings, validate_runtime_settings
-from app.database import init_database
+from app.database import SessionLocal, init_database
 from app.middleware.rate_limit import InMemoryRateLimitMiddleware
 from app.routers import assistant, auth, courses, cpp_tools, documents, learning
+from app.services.processing_jobs import recover_interrupted_processing_jobs
 from app.services.vector_store import retrieval_backend_status
 
 
@@ -20,6 +21,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 async def lifespan(app: FastAPI):
     validate_runtime_settings()
     init_database()
+    with SessionLocal() as db:
+        recovered_jobs = recover_interrupted_processing_jobs(db)
+        if recovered_jobs:
+            db.commit()
+            logging.getLogger(__name__).warning(
+                "Marked %s interrupted background job(s) as failed after startup",
+                recovered_jobs,
+            )
     yield
 
 
