@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from app.services.cpp_compile_service import compile_and_run_cpp
 from app.services.llm_service import call_llm
 
-
 OFFLINE_CPP_PROVIDER = "rule/offline"
 
 
@@ -18,16 +17,44 @@ class CppPattern:
 
 
 CPP_PATTERNS = [
-    CppPattern("类与对象", r"\b(class|struct)\s+[A-Za-z_]\w*", "关注访问控制、成员函数和对象生命周期。"),
-    CppPattern("继承与派生", r"\b(class|struct)\s+\w+\s*:\s*(public|protected|private)?\s*\w+", "常考基类/派生类构造顺序、访问权限和替换原则。"),
-    CppPattern("虚函数与多态", r"\bvirtual\b|\boverride\b", "常考动态绑定、基类指针/引用调用派生类重写函数。"),
-    CppPattern("纯虚函数与抽象类", r"=\s*0\s*;", "注意抽象类不能直接实例化，派生类必须实现纯虚函数。"),
+    CppPattern(
+        "类与对象", r"\b(class|struct)\s+[A-Za-z_]\w*", "关注访问控制、成员函数和对象生命周期。"
+    ),
+    CppPattern(
+        "继承与派生",
+        r"\b(class|struct)\s+\w+\s*:\s*(public|protected|private)?\s*\w+",
+        "常考基类/派生类构造顺序、访问权限和替换原则。",
+    ),
+    CppPattern(
+        "虚函数与多态",
+        r"\bvirtual\b|\boverride\b",
+        "常考动态绑定、基类指针/引用调用派生类重写函数。",
+    ),
+    CppPattern(
+        "纯虚函数与抽象类", r"=\s*0\s*;", "注意抽象类不能直接实例化，派生类必须实现纯虚函数。"
+    ),
     CppPattern("友元", r"\bfriend\b", "友元可访问私有成员，但不属于类成员，破坏封装时要谨慎。"),
-    CppPattern("运算符重载", r"\boperator\s*(?:[+\-*/%=<>!&|^~\[\](),]+|new|delete)", "常考返回值类型、成员/非成员形式和 const 正确性。"),
+    CppPattern(
+        "运算符重载",
+        r"\boperator\s*(?:[+\-*/%=<>!&|^~\[\](),]+|new|delete)",
+        "常考返回值类型、成员/非成员形式和 const 正确性。",
+    ),
     CppPattern("模板", r"\btemplate\s*<", "关注类型参数、函数模板/类模板实例化和编译期多态。"),
-    CppPattern("STL 容器", r"\b(std::)?(vector|map|set|queue|stack|list|deque|string)\s*<", "注意迭代器失效、复杂度和容器适用场景。"),
-    CppPattern("指针与引用", r"(\w+\s*[*&]\s*\w+)|(\w+\s*[*&]\s*[),=])", "常考空指针、悬垂引用、传参语义和资源释放。"),
-    CppPattern("构造与析构", r"\b~[A-Za-z_]\w*\s*\(|\b[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*\s*\(", "关注初始化列表、析构顺序和基类析构函数是否 virtual。"),
+    CppPattern(
+        "STL 容器",
+        r"\b(std::)?(vector|map|set|queue|stack|list|deque|string)\s*<",
+        "注意迭代器失效、复杂度和容器适用场景。",
+    ),
+    CppPattern(
+        "指针与引用",
+        r"(\w+\s*[*&]\s*\w+)|(\w+\s*[*&]\s*[),=])",
+        "常考空指针、悬垂引用、传参语义和资源释放。",
+    ),
+    CppPattern(
+        "构造与析构",
+        r"\b~[A-Za-z_]\w*\s*\(|\b[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*\s*\(",
+        "关注初始化列表、析构顺序和基类析构函数是否 virtual。",
+    ),
 ]
 
 
@@ -41,7 +68,9 @@ def analyze_cpp_code(
     reference_code = code_text.strip()
     submitted_code = user_code.strip()
     target_code = submitted_code or reference_code
-    combined = "\n".join(part for part in (problem_text.strip(), reference_code, submitted_code) if part)
+    combined = "\n".join(
+        part for part in (problem_text.strip(), reference_code, submitted_code) if part
+    )
 
     exam_points = _detect_exam_points(combined)
     compile_payload = compile_and_run_cpp(target_code, sample_input)
@@ -116,24 +145,72 @@ def _diagnose_cpp_errors(code: str, reference_code: str = "") -> list[dict]:
             }
         ]
 
-    if re.search(r"\b(cout|cin|endl)\b", code) and not re.search(r"using\s+namespace\s+std|std::", code):
-        issues.append(_issue("warning", "std 命名空间缺失", "代码使用 cout/cin/endl，但没有 std:: 前缀或 using namespace std。"))
-    if re.search(r"\bvector\s*<|\bstring\b", code) and "std::" not in code and "using namespace std" not in code:
-        issues.append(_issue("warning", "STL 名称空间风险", "vector/string 等 STL 类型通常需要 std:: 前缀或 using namespace std。"))
+    if re.search(r"\b(cout|cin|endl)\b", code) and not re.search(
+        r"using\s+namespace\s+std|std::", code
+    ):
+        issues.append(
+            _issue(
+                "warning",
+                "std 命名空间缺失",
+                "代码使用 cout/cin/endl，但没有 std:: 前缀或 using namespace std。",
+            )
+        )
+    if (
+        re.search(r"\bvector\s*<|\bstring\b", code)
+        and "std::" not in code
+        and "using namespace std" not in code
+    ):
+        issues.append(
+            _issue(
+                "warning",
+                "STL 名称空间风险",
+                "vector/string 等 STL 类型通常需要 std:: 前缀或 using namespace std。",
+            )
+        )
     if re.search(r"\bnew\b", code) and not re.search(r"\bdelete\b|unique_ptr|shared_ptr", code):
-        issues.append(_issue("warning", "资源释放风险", "代码出现 new，但没有对应 delete 或智能指针，可能造成内存泄漏。"))
-    if re.search(r"\bvirtual\b", code) and re.search(r"\bclass\s+\w+", code) and not re.search(r"virtual\s+~\w+\s*\(", code):
-        issues.append(_issue("suggestion", "基类析构函数建议设为 virtual", "含虚函数的基类如果通过基类指针删除派生类对象，析构函数应声明为 virtual。"))
+        issues.append(
+            _issue(
+                "warning",
+                "资源释放风险",
+                "代码出现 new，但没有对应 delete 或智能指针，可能造成内存泄漏。",
+            )
+        )
+    if (
+        re.search(r"\bvirtual\b", code)
+        and re.search(r"\bclass\s+\w+", code)
+        and not re.search(r"virtual\s+~\w+\s*\(", code)
+    ):
+        issues.append(
+            _issue(
+                "suggestion",
+                "基类析构函数建议设为 virtual",
+                "含虚函数的基类如果通过基类指针删除派生类对象，析构函数应声明为 virtual。",
+            )
+        )
     if re.search(r"\bclass\s+\w+[\s\S]*?}\s*(?!;)", code):
-        issues.append(_issue("error", "类定义后可能缺少分号", "C++ 的 class/struct 定义结束后需要以分号结尾。"))
+        issues.append(
+            _issue(
+                "error", "类定义后可能缺少分号", "C++ 的 class/struct 定义结束后需要以分号结尾。"
+            )
+        )
     if re.search(r"=\s*0\s*;", code) and re.search(r"\bnew\s+\w+\s*\(", code):
-        issues.append(_issue("warning", "抽象类实例化风险", "如果 new 的类型仍含纯虚函数，会导致抽象类不能实例化。"))
+        issues.append(
+            _issue(
+                "warning",
+                "抽象类实例化风险",
+                "如果 new 的类型仍含纯虚函数，会导致抽象类不能实例化。",
+            )
+        )
 
     if reference_code:
         issues.extend(_compare_with_reference(code, reference_code))
 
     if not issues:
-        issues.append(_issue("ok", "未发现明显问题", "规则检查没有发现高风险错误，仍建议用编译器和样例数据验证。"))
+        issues.append(
+            _issue(
+                "ok", "未发现明显问题", "规则检查没有发现高风险错误，仍建议用编译器和样例数据验证。"
+            )
+        )
     return issues[:8]
 
 
@@ -150,7 +227,13 @@ def _compare_with_reference(user_code: str, reference_code: str) -> list[dict]:
             )
         )
     if "虚函数与多态" in expected_points and "override" not in user_code and "virtual" in user_code:
-        issues.append(_issue("suggestion", "建议补充 override", "派生类重写虚函数时加 override，可让编译器检查签名是否一致。"))
+        issues.append(
+            _issue(
+                "suggestion",
+                "建议补充 override",
+                "派生类重写虚函数时加 override，可让编译器检查签名是否一致。",
+            )
+        )
     return issues
 
 
@@ -165,7 +248,9 @@ def _offline_explanation(
     code = submitted_code or reference_code
     lines = [line.rstrip() for line in code.splitlines() if line.strip()]
     point_lines = "\n".join(f"- {point['name']}：{point['exam_hint']}" for point in exam_points)
-    issue_lines = "\n".join(f"- [{item['level']}] {item['title']}：{item['detail']}" for item in error_diagnosis)
+    issue_lines = "\n".join(
+        f"- [{item['level']}] {item['title']}：{item['detail']}" for item in error_diagnosis
+    )
     compile_result = compile_payload.get("compile_result", {})
     run_result = compile_payload.get("run_result", {})
     compile_lines = [
@@ -175,7 +260,9 @@ def _offline_explanation(
     if not compile_result.get("executed", True):
         compile_lines.append("- 编译状态：安全演示模式下未执行本地编译运行")
     else:
-        compile_lines.append(f"- 编译状态：{'成功' if compile_result.get('success') else '失败或未执行'}")
+        compile_lines.append(
+            f"- 编译状态：{'成功' if compile_result.get('success') else '失败或未执行'}"
+        )
     if compile_result.get("stderr"):
         compile_lines.append(f"- 编译输出：{compile_result.get('stderr')[:500]}")
     if run_result.get("executed"):
@@ -237,32 +324,58 @@ def _compile_issues(compile_payload: dict) -> list[dict]:
     compile_result = compile_payload.get("compile_result", {})
     run_result = compile_payload.get("run_result", {})
     issues: list[dict] = []
-    if compile_payload.get("sandbox_level") == "disabled" or not compile_result.get("executed", True):
+    if not compile_result.get("executed", True):
+        title = (
+            "安全演示模式"
+            if compile_payload.get("sandbox_level") == "disabled"
+            else "未执行本地编译"
+        )
+        detail = compile_result.get("stderr")
+        if not detail and compile_payload.get("sandbox_level") == "disabled":
+            detail = "当前 CPP_RUN_ENABLED=false，系统只做规则分析，未执行本地 g++ 编译或样例运行。"
         issues.append(
             _issue(
                 "info",
-                "安全演示模式",
-                "当前 CPP_RUN_ENABLED=false，系统只做规则分析，未执行本地 g++ 编译或样例运行。",
+                title,
+                detail or "当前配置未执行本地 g++ 编译或样例运行。",
             )
         )
         return issues
     if not compile_result.get("compiler_available", True):
-        issues.append(_issue("info", "未检测到 g++", compile_result.get("stderr") or "本机未安装 g++，已跳过编译诊断。"))
+        issues.append(
+            _issue(
+                "info",
+                "未检测到 g++",
+                compile_result.get("stderr") or "本机未安装 g++，已跳过编译诊断。",
+            )
+        )
         return issues
     if compile_result.get("timeout"):
-        issues.append(_issue("error", "编译超时", "编译时间超过限制，可能存在模板递归过深或环境异常。"))
+        issues.append(
+            _issue("error", "编译超时", "编译时间超过限制，可能存在模板递归过深或环境异常。")
+        )
     elif compile_result.get("success"):
-        issues.append(_issue("ok", "本地编译通过", "代码已通过 g++ -std=c++17 -Wall -Wextra -O0 编译。"))
+        issues.append(
+            _issue("ok", "本地编译通过", "代码已通过 g++ -std=c++17 -Wall -Wextra -O0 编译。")
+        )
     else:
         detail = compile_result.get("stderr") or "g++ 返回非 0 状态。"
         issues.append(_issue("error", "本地编译失败", detail[:900]))
     if run_result.get("executed"):
         if run_result.get("timeout"):
-            issues.append(_issue("error", "样例运行超时", "程序运行超过时间限制，可能存在死循环或阻塞输入。"))
+            issues.append(
+                _issue("error", "样例运行超时", "程序运行超过时间限制，可能存在死循环或阻塞输入。")
+            )
         elif run_result.get("success"):
-            issues.append(_issue("ok", "样例运行成功", (run_result.get("stdout") or "程序无输出")[:500]))
+            issues.append(
+                _issue("ok", "样例运行成功", (run_result.get("stdout") or "程序无输出")[:500])
+            )
         else:
-            issues.append(_issue("error", "样例运行失败", (run_result.get("stderr") or "程序返回非 0 状态")[:500]))
+            issues.append(
+                _issue(
+                    "error", "样例运行失败", (run_result.get("stderr") or "程序返回非 0 状态")[:500]
+                )
+            )
     return issues[:6]
 
 
@@ -300,7 +413,11 @@ def _summary(exam_points: list[dict], error_diagnosis: list[dict], submitted_cod
 
 def _code_structure(lines: list[str]) -> str:
     class_count = sum(1 for line in lines if re.search(r"\b(class|struct)\s+\w+", line))
-    function_count = sum(1 for line in lines if re.search(r"\w+\s+\w+\s*\([^;]*\)\s*(const)?\s*(override)?\s*[{;]", line))
+    function_count = sum(
+        1
+        for line in lines
+        if re.search(r"\w+\s+\w+\s*\([^;]*\)\s*(const)?\s*(override)?\s*[{;]", line)
+    )
     main_count = sum(1 for line in lines if re.search(r"\bmain\s*\(", line))
     return f"- 类/结构体数量约 {class_count} 个\n- 函数或成员函数声明约 {function_count} 个\n- main 入口 {'存在' if main_count else '未识别'}"
 

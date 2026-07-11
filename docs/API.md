@@ -12,6 +12,40 @@ Authorization: Bearer <access_token>
 
 `GET /health`
 
+`GET /health/detail`
+
+返回运行状态和检索后端透明度信息。`chroma_available=false` 表示当前没有使用 Chroma，问答会降级到 SQLite sparse search；默认 `hash` embedding 和 SQLite sparse search 只适合演示检索链路，不等同于真实语义向量检索。
+
+```json
+{
+  "status": "ok",
+  "name": "StudyMate",
+  "text_llm_provider": "mock",
+  "text_llm_model": "",
+  "embedding_provider": "hash",
+  "embedding_provider_actual": "hash/384d",
+  "embedding_model": "BAAI/bge-small-zh-v1.5",
+  "ocr_llm_provider": "mock",
+  "ocr_llm_model": "",
+  "retrieval_provider": "sqlite_sparse",
+  "active_backend": "sqlite_sparse",
+  "provider_labels": {
+    "text_generation": "离线规则生成",
+    "embedding": "Hash 检索",
+    "ocr": "离线文本提取",
+    "retrieval": "SQLite 稀疏检索"
+  },
+  "capability_label": "离线规则生成 · Hash 检索",
+  "retrieval": {
+    "chroma_available": false,
+    "embedding_provider": "hash/384d",
+    "fallback_search": "sqlite_sparse",
+    "active_backend": "sqlite_sparse",
+    "search_order": ["sqlite_sparse"]
+  }
+}
+```
+
 ## Auth
 
 `POST /auth/register`
@@ -105,7 +139,7 @@ Authorization: Bearer <access_token>
 
 `POST /courses/{course_id}/documents/{document_id}/ocr`
 
-创建后台 OCR 任务。后端会调用本地 `qwen3-vl:30b` 做 OCR，并把识别结果切分入库。
+创建后台 OCR 任务并把识别结果切分入库。默认 `OCR_LLM_PROVIDER=mock` 不会调用真实 OCR 模型；`fast` 模式优先使用 PDF 已有文本快速索引。需要逐页视觉 OCR 时，必须显式配置 `OCR_LLM_PROVIDER=ollama`、`OCR_LLM_MODEL`（例如 `qwen3-vl:30b`）及可访问的 Ollama 地址。
 单次 OCR 最多 20 页，建议优先使用 `fast` 模式处理 5-10 页。
 
 ```json
@@ -140,15 +174,55 @@ Authorization: Bearer <access_token>
 
 `GET /courses/{course_id}/documents/{document_id}/ocr-jobs/{job_id}`
 
-查询 OCR 任务进度。`status` 可能是 `queued`、`running`、`completed`、`failed`。
+查询 OCR 任务进度。`status` 可能是 `queued`、`running`、`completed`、`failed`、`cancelled`。
 
 `POST /courses/{course_id}/documents/{document_id}/ocr-jobs/{job_id}/cancel`
 
-停止正在运行的 OCR 任务；已入库的页面片段会保留。
+标记取消正在运行的 OCR 任务；后台会在下一次检查时停止，已入库的页面片段会保留。
 
 `DELETE /courses/{course_id}/documents/{document_id}`
 
 删除单个资料，同时删除对应 `DocumentChunk`、`ChunkKnowledgePoint`、OCR 任务和本地上传文件。若知识点来源于该资料，会清空来源信息但保留学习画像中的知识点记录。
+
+## Processing Jobs
+
+资料解析、OCR、重新索引和知识点同步都会写入统一任务表。旧的资料状态字段仍然保留，课程详情中的每个资料会额外返回 `latest_job`。当前实现基于 FastAPI `BackgroundTasks` 和同步请求，不是可靠队列；进程重启后仍处于 `queued`/`running` 的任务会被标记为 `failed`，`stage=interrupted`，并提示手动重试。
+
+`GET /courses/{course_id}/jobs`
+
+返回当前登录用户拥有课程下的最近任务，按创建时间倒序：
+
+```json
+[
+  {
+    "id": 12,
+    "course_id": 1,
+    "document_id": 3,
+    "job_type": "document_parse",
+    "status": "completed",
+    "stage": "indexed",
+    "progress": 100,
+    "error_message": "",
+    "started_at": "2026-06-20T10:00:00",
+    "finished_at": "2026-06-20T10:00:03",
+    "created_at": "2026-06-20T10:00:00",
+    "updated_at": "2026-06-20T10:00:03",
+    "document": {
+      "id": 3,
+      "original_filename": "notes.txt",
+      "status": "indexed"
+    }
+  }
+]
+```
+
+`POST /courses/{course_id}/jobs/{job_id}/retry`
+
+仅失败或已取消任务可重试。会按 `job_type` 重新触发原逻辑：`document_parse`、`ocr`、`reindex`、`knowledge_sync`。
+
+`POST /courses/{course_id}/jobs/{job_id}/cancel`
+
+取消排队或运行中的任务。OCR 会在后台循环下一次检查时停止；解析、重新索引和知识点同步任务只能标记取消，已开始的工作可能继续，已经写入的处理结果保留。
 
 `POST /courses/{course_id}/documents/{document_id}/vision`
 
@@ -168,6 +242,8 @@ Authorization: Bearer <access_token>
 ```
 
 ## RAG Question Answering
+
+默认检索顺序是：Chroma 可用时优先使用 Chroma；Chroma 未安装、初始化失败或查询失败时，自动降级为 SQLite sparse search。可以通过 `GET /health/detail` 查看当前是否真的连上 Chroma。默认 `hash` embedding 是稳定演示兜底，不是深度语义 embedding；SQLite sparse search 是关键词/稀疏权重检索，不应宣传成生产级向量库能力。
 
 资料入库时会生成本地 embedding 并写入 Chroma 持久化 collection；如果环境没有安装 Chroma，后端会自动降级到 SQLite 稀疏向量检索，响应结构保持一致。
 
@@ -206,12 +282,13 @@ Authorization: Bearer <access_token>
 `answer_status` 可能是：
 
 - `answered`: 已基于资料回答。
-- `low_confidence`: 检索分数不足，已拒答。
+- `low_confidence`: 检索分数不足，或回答生成后来源校验不足，已拒答。
 - `empty_knowledge_base`: 当前课程没有可检索知识库。
 - `processing`: 资料仍在解析入库。
 - `needs_ocr`: 资料需要 OCR 后才能检索。
 
 `provider` / `llm_provider` 会返回后端实际使用的链路，例如 `mock/offline`、`deepseek/deepseek-v4-flash` 或 `ollama/qwen3-vl:30b`。当低置信拒答时，`llm_provider` 为 `system`，表示没有调用 LLM。
+`retrieval_provider` 可能带有 `+rerank/rule` 后缀，表示启用了默认规则 rerank。若配置 `RERANK_PROVIDER=none`，则不启用 rerank。
 
 ## Review Outline
 
@@ -278,7 +355,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-默认 `CPP_RUN_ENABLED=false`，只做规则分析，不执行本地编译运行。如果改为 `true`，`sandbox_level` 会变为 `local_tempdir_timeout_only`，表示仅有临时目录和超时限制，不是完整沙箱。
+默认 `CPP_RUN_ENABLED=false`，只做规则分析，不执行本地编译运行。开发环境改为 `true` 后，`sandbox_level` 会变为 `local_tempdir_timeout_only`，表示仅有临时目录和超时限制，不是完整沙箱。`APP_ENV=production` 下打开本地执行会被拒绝；`CPP_RUN_SANDBOX=docker` 当前未实现，也会被拒绝。
 
 ## Learning Diagnosis
 

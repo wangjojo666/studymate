@@ -9,7 +9,6 @@ from dataclasses import dataclass
 
 from app.config import settings
 
-
 PROVIDER_DEFAULTS = {
     "openai": ("https://api.openai.com/v1", "gpt-4o-mini", "OPENAI_API_KEY"),
     "deepseek": ("https://api.deepseek.com", "deepseek-v4-flash", "DEEPSEEK_API_KEY"),
@@ -135,7 +134,9 @@ def offline_answer(question: str, context: str) -> str:
     sentences = _rank_sentences(question, context)
     if not sentences:
         return "资料中没有找到足够依据回答这个问题。请换一个更贴近资料内容的问题，或补充上传相关课程资料。"
-    bullets = "\n".join(f"{index}. {sentence}" for index, sentence in enumerate(sentences[:4], start=1))
+    bullets = "\n".join(
+        f"{index}. {sentence}" for index, sentence in enumerate(sentences[:4], start=1)
+    )
     return (
         "根据已上传课程资料，和问题最相关的内容如下：\n"
         f"{bullets}\n\n"
@@ -149,12 +150,17 @@ def offline_outline(context: str) -> str:
     sentences = _split_sentences(context)[:12]
     concept_lines = "\n".join(f"- {item}" for item in sentences[:4]) or "- 暂无足够内容"
     formula_lines = "\n".join(
-        f"- {item}" for item in sentences if any(symbol in item for symbol in ("=", "公式", "定理", "性质"))
+        f"- {item}"
+        for item in sentences
+        if any(symbol in item for symbol in ("=", "公式", "定理", "性质"))
     )
     if not formula_lines:
         formula_lines = "- 资料中暂未识别到明显公式，可补充更多讲义后重新生成。"
     mistake_lines = "\n".join(f"- 容易混淆：{item}" for item in sentences[4:8]) or "- 暂无足够内容"
-    exam_lines = "\n".join(f"- 可考查：解释或应用“{item[:40]}”" for item in sentences[8:12]) or "- 暂无足够内容"
+    exam_lines = (
+        "\n".join(f"- 可考查：解释或应用“{item[:40]}”" for item in sentences[8:12])
+        or "- 暂无足够内容"
+    )
     return (
         "## 核心概念\n"
         f"{concept_lines}\n\n"
@@ -183,7 +189,9 @@ def offline_practice(
     for index in range(count):
         basis = sentences[index % len(sentences)]
         qtype = question_types[index % len(question_types)]
-        focus_prefix = f"【{difficulty_label}｜{focus_name}】" if focus_name else f"【{difficulty_label}】"
+        focus_prefix = (
+            f"【{difficulty_label}｜{focus_name}】" if focus_name else f"【{difficulty_label}】"
+        )
         if qtype == "选择题":
             block = (
                 f"{index + 1}. {focus_prefix}【选择题】根据资料，下面哪一项最接近原文重点？\n"

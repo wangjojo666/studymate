@@ -1,7 +1,11 @@
 import axios from "axios";
 
+import { normalizeApiError } from "./errors";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+
 const http = axios.create({
-  baseURL: "/api",
+  baseURL: API_BASE_URL,
   timeout: 600000
 });
 
@@ -20,11 +24,9 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error?.response?.status === 401) {
+    if (shouldRedirectToLogin(error)) {
       clearAuthSession();
-      if (window.location.pathname !== "/login") {
-        window.location.assign(`/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`);
-      }
+      window.location.assign(`/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`);
     }
     error.userMessage = normalizeApiError(error);
     return Promise.reject(error);
@@ -37,7 +39,13 @@ export function getAuthToken() {
 
 export function getStoredUser() {
   const raw = window.localStorage.getItem(USER_KEY);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    window.localStorage.removeItem(USER_KEY);
+    return null;
+  }
 }
 
 export function setAuthSession(payload) {
@@ -68,8 +76,18 @@ export async function getCurrentUser() {
   return data;
 }
 
-export async function getCourses() {
-  const { data } = await http.get("/courses");
+export async function getHealthDetail(options = {}) {
+  const { data } = await http.get("/health/detail", options);
+  return data;
+}
+
+export async function getDashboardSummary(options = {}) {
+  const { data } = await http.get("/courses/dashboard-summary", options);
+  return data;
+}
+
+export async function getCourses(options = {}) {
+  const { data } = await http.get("/courses", options);
   return data;
 }
 
@@ -78,136 +96,145 @@ export async function createCourse(payload) {
   return data;
 }
 
-export async function getCourse(id) {
-  const { data } = await http.get(`/courses/${id}`);
+export async function getCourse(id, options = {}) {
+  const { data } = await http.get(`/courses/${id}`, options);
   return data;
 }
 
-export async function uploadDocument(courseId, file) {
+export async function uploadDocument(courseId, file, options = {}) {
   const form = new FormData();
   form.append("file", file);
   const { data } = await http.post(`/courses/${courseId}/documents`, form, {
+    ...options,
     headers: { "Content-Type": "multipart/form-data" }
   });
   return data;
 }
 
-export async function deleteDocument(courseId, documentId) {
-  const { data } = await http.delete(`/courses/${courseId}/documents/${documentId}`);
+export async function deleteDocument(courseId, documentId, options = {}) {
+  const { data } = await http.delete(`/courses/${courseId}/documents/${documentId}`, options);
   return data;
 }
 
-export async function reindexCourse(courseId) {
-  const { data } = await http.post(`/courses/${courseId}/reindex`);
+export async function reindexCourse(courseId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/reindex`, undefined, options);
   return data;
 }
 
-export async function reindexDocument(courseId, documentId) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/reindex`);
+export async function reindexDocument(courseId, documentId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/reindex`, undefined, options);
   return data;
 }
 
-export async function ocrDocument(courseId, documentId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr`, payload);
+export async function getProcessingJobs(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/jobs`, options);
   return data;
 }
 
-export async function visionDocument(courseId, documentId) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/vision`);
+export async function retryProcessingJob(courseId, jobId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/retry`, undefined, options);
   return data;
 }
 
-export async function getOcrJob(courseId, documentId, jobId) {
-  const { data } = await http.get(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}`);
+export async function cancelProcessingJob(courseId, jobId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/cancel`, undefined, options);
   return data;
 }
 
-export async function cancelOcrJob(courseId, documentId, jobId) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}/cancel`);
+export async function ocrDocument(courseId, documentId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr`, payload, options);
   return data;
 }
 
-export async function askCourse(courseId, question) {
+export async function visionDocument(courseId, documentId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/vision`, undefined, options);
+  return data;
+}
+
+export async function getOcrJob(courseId, documentId, jobId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}`, options);
+  return data;
+}
+
+export async function cancelOcrJob(courseId, documentId, jobId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}/cancel`, undefined, options);
+  return data;
+}
+
+export async function askCourse(courseId, question, options = {}) {
   const { data } = await http.post(`/courses/${courseId}/ask`, {
     question,
     top_k: 5
-  });
+  }, options);
   return data;
 }
 
-export async function getSourceChunk(courseId, chunkId, params = {}) {
-  const { data } = await http.get(`/courses/${courseId}/chunks/${chunkId}`, { params });
+export async function getSourceChunk(courseId, chunkId, params = {}, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/chunks/${chunkId}`, { ...options, params });
   return data;
 }
 
-export async function generateOutline(courseId) {
-  const { data } = await http.post(`/courses/${courseId}/review-outline`);
+export async function generateOutline(courseId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/review-outline`, undefined, options);
   return data;
 }
 
-export async function generatePractice(courseId, payload) {
+export async function generatePractice(courseId, payload, options = {}) {
   const request = typeof payload === "number" ? { count: payload } : payload;
-  const { data } = await http.post(`/courses/${courseId}/practice`, request);
+  const { data } = await http.post(`/courses/${courseId}/practice`, request, options);
   return data;
 }
 
-export async function analyzeCppCode(courseId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/cpp/analyze`, payload);
+export async function analyzeCppCode(courseId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/cpp/analyze`, payload, options);
   return data;
 }
 
-export async function getLearningProfile(courseId) {
-  const { data } = await http.get(`/courses/${courseId}/learning/profile`);
+export async function getLearningProfile(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/learning/profile`, options);
   return data;
 }
 
-export async function getKnowledgeGraph(courseId) {
-  const { data } = await http.get(`/courses/${courseId}/learning/graph`);
+export async function getKnowledgeGraph(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/learning/graph`, options);
   return data;
 }
 
-export async function getWrongAttempts(courseId) {
-  const { data } = await http.get(`/courses/${courseId}/learning/wrong-attempts`);
+export async function getWrongAttempts(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/learning/wrong-attempts`, options);
   return data;
 }
 
-export async function submitPracticeAttempt(courseId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/learning/attempts`, payload);
+export async function submitPracticeAttempt(courseId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/learning/attempts`, payload, options);
   return data;
 }
 
-export async function generateReviewPlan(courseId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/learning/review-plan`, payload);
+export async function generateReviewPlan(courseId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/learning/review-plan`, payload, options);
   return data;
 }
 
-export async function updateReviewTask(courseId, taskId, status) {
-  const { data } = await http.patch(`/courses/${courseId}/learning/tasks/${taskId}`, { status });
+export async function updateReviewTask(courseId, taskId, status, options = {}) {
+  const { data } = await http.patch(`/courses/${courseId}/learning/tasks/${taskId}`, { status }, options);
   return data;
 }
 
-export async function downloadLearningReport(courseId) {
+export async function downloadLearningReport(courseId, options = {}) {
   const { data } = await http.get(`/courses/${courseId}/learning/report.pdf`, {
+    ...options,
     responseType: "blob"
   });
   return data;
 }
 
-function normalizeApiError(error) {
-  if (error?.code === "ECONNABORTED") {
-    return "请求超时，任务可能仍在后台运行，请稍后刷新状态";
-  }
-  if (error?.code === "ERR_NETWORK") {
-    return "后端服务未启动或网络异常";
-  }
-  const status = error?.response?.status;
-  const detail = error?.response?.data?.detail;
-  if (status === 401) return "登录已过期，请重新登录";
-  if ([400, 404, 409, 413, 500].includes(status) && detail) {
-    if (Array.isArray(detail)) {
-      return detail.map((item) => item?.msg || item?.message || String(item)).filter(Boolean).join("；");
-    }
-    return String(detail);
-  }
-  return "";
+export function isRequestCanceled(error) {
+  return axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "AbortError";
+}
+
+function shouldRedirectToLogin(error) {
+  if (error?.response?.status !== 401) return false;
+  if (window.location.pathname === "/login") return false;
+  const url = String(error?.config?.url || "");
+  return !url.startsWith("/auth/login") && !url.startsWith("/auth/register");
 }

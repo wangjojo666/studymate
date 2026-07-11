@@ -7,8 +7,10 @@ from app.models.entities import (
     GeneratedMaterial,
     KnowledgePoint,
     OcrJob,
+    ProcessingJob,
     QuestionAttempt,
     ReviewTask,
+    User,
     UserKnowledgeStatus,
 )
 
@@ -21,7 +23,9 @@ __all__ = [
     "GeneratedMaterial",
     "KnowledgePoint",
     "OcrJob",
+    "ProcessingJob",
     "QuestionAttempt",
     "ReviewTask",
+    "User",
     "UserKnowledgeStatus",
 ]

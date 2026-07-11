@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -31,6 +30,7 @@ def unauthenticated_client(tmp_path, monkeypatch):
     monkeypatch.setenv("RAG_ENABLE_STRICT_SOURCE_MODE", "true")
     monkeypatch.setenv("CPP_RUN_ENABLED", "false")
     monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("ENABLE_DEMO_USER", "true")
 
     for module_name in list(sys.modules):
         if module_name == "app" or module_name.startswith("app."):
@@ -53,11 +53,17 @@ def client(unauthenticated_client):
 def auth_helpers(client):
     class Helpers:
         @staticmethod
-        def create_user_and_login(email: str | None = None, password: str = "test-password") -> dict:
+        def create_user_and_login(
+            email: str | None = None, password: str = "test-password"
+        ) -> dict:
             address = email or f"user-{uuid.uuid4().hex[:10]}@example.com"
             response = client.post(
                 "/api/auth/register",
-                json={"email": address, "password": password, "display_name": address.split("@", 1)[0]},
+                json={
+                    "email": address,
+                    "password": password,
+                    "display_name": address.split("@", 1)[0],
+                },
             )
             assert response.status_code == 200, response.text
             payload = response.json()
@@ -111,7 +117,9 @@ def auth_helpers(client):
                 response = client.get(f"/api/courses/{course_id}", headers=headers)
                 assert response.status_code == 200, response.text
                 documents = response.json().get("documents", [])
-                last_document = next((item for item in documents if item["id"] == document_id), None)
+                last_document = next(
+                    (item for item in documents if item["id"] == document_id), None
+                )
                 if last_document and last_document.get("status") in terminal_statuses:
                     return last_document
                 time.sleep(0.05)

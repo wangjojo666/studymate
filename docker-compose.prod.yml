@@ -1,0 +1,14 @@
+# Production overlay. Invoke with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+# AUTH_SECRET_KEY is deliberately fail-closed during Compose interpolation.
+services:
+  backend:
+    environment:
+      APP_ENV: production
+      ENABLE_DEMO_USER: "false"
+      AUTH_SECRET_KEY: "${AUTH_SECRET_KEY:?required}"
+      RATE_LIMIT_ENABLED: "true"
+    restart: unless-stopped
+
+  frontend:
+    restart: unless-stopped

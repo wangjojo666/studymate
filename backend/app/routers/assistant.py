@@ -9,7 +9,6 @@ from app.models.entities import Course, Document, DocumentChunk, User
 from app.schemas import AskRequest, PracticeRequest
 from app.services.rag_service import answer_question, generate_outline, generate_practice
 
-
 router = APIRouter(prefix="/courses/{course_id}", tags=["assistant"])
 
 

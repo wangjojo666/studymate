@@ -1,0 +1,100 @@
+name: studymate
+
+# Local demo profile. Only the Nginx frontend is published, and it is bound to
+# loopback by default. Production settings live in docker-compose.prod.yml.
+services:
+  backend:
+    build:
+      context: ./backend
+      args:
+        INSTALL_CHROMA: "${INSTALL_CHROMA:-false}"
+    environment:
+      APP_NAME: "${APP_NAME:-StudyMate}"
+      APP_ENV: development
+      API_PREFIX: "${API_PREFIX:-/api}"
+      ENABLE_DEMO_USER: "true"
+      DATABASE_URL: sqlite:////app/storage/studymate.db
+      STORAGE_DIR: /app/storage
+      UPLOAD_DIR: /app/storage/uploads
+      CHROMA_DIR: /app/storage/chroma
+      AUTH_TOKEN_EXPIRE_MINUTES: "${AUTH_TOKEN_EXPIRE_MINUTES:-10080}"
+      TEXT_LLM_PROVIDER: "${TEXT_LLM_PROVIDER:-mock}"
+      TEXT_LLM_MODEL: "${TEXT_LLM_MODEL:-}"
+      TEXT_LLM_BASE_URL: "${TEXT_LLM_BASE_URL:-}"
+      TEXT_LLM_API_KEY: "${TEXT_LLM_API_KEY:-}"
+      TEXT_LLM_FALLBACK_PROVIDER: "${TEXT_LLM_FALLBACK_PROVIDER:-none}"
+      TEXT_LLM_FALLBACK_MODEL: "${TEXT_LLM_FALLBACK_MODEL:-}"
+      TEXT_LLM_FALLBACK_BASE_URL: "${TEXT_LLM_FALLBACK_BASE_URL:-}"
+      TEXT_LLM_FALLBACK_API_KEY: "${TEXT_LLM_FALLBACK_API_KEY:-}"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-hash}"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}"
+      EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
+      EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+      EMBEDDING_DIMENSION: "${EMBEDDING_DIMENSION:-384}"
+      EMBEDDING_BATCH_SIZE: "${EMBEDDING_BATCH_SIZE:-16}"
+      OCR_LLM_PROVIDER: "${OCR_LLM_PROVIDER:-mock}"
+      OCR_LLM_MODEL: "${OCR_LLM_MODEL:-}"
+      OCR_LLM_BASE_URL: "${OCR_LLM_BASE_URL:-}"
+      OCR_DEFAULT_MAX_PAGES: "${OCR_DEFAULT_MAX_PAGES:-10}"
+      OCR_MAX_PAGES_PER_REQUEST: "${OCR_MAX_PAGES_PER_REQUEST:-20}"
+      RERANK_PROVIDER: "${RERANK_PROVIDER:-rule}"
+      RAG_TOP_K: "${RAG_TOP_K:-5}"
+      RAG_MIN_SCORE: "${RAG_MIN_SCORE:-0.12}"
+      RAG_CONTEXT_MAX_CHARS: "${RAG_CONTEXT_MAX_CHARS:-6000}"
+      RAG_ENABLE_STRICT_SOURCE_MODE: "${RAG_ENABLE_STRICT_SOURCE_MODE:-true}"
+      DOCUMENT_UPLOAD_MAX_BYTES: "${DOCUMENT_UPLOAD_MAX_BYTES:-104857600}"
+      TXT_UPLOAD_MAX_BYTES: "${TXT_UPLOAD_MAX_BYTES:-10485760}"
+      OFFICE_ZIP_MAX_FILES: "${OFFICE_ZIP_MAX_FILES:-2500}"
+      OFFICE_ZIP_MAX_MEMBER_BYTES: "${OFFICE_ZIP_MAX_MEMBER_BYTES:-83886080}"
+      OFFICE_ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES: "${OFFICE_ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES:-209715200}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
+      ZHIPU_API_KEY: "${ZHIPU_API_KEY:-}"
+      CPP_RUN_ENABLED: "false"
+      CPP_RUN_SANDBOX: "${CPP_RUN_SANDBOX:-none}"
+      CPP_COMPILE_TIMEOUT_SECONDS: "${CPP_COMPILE_TIMEOUT_SECONDS:-8}"
+      CPP_RUN_TIMEOUT_SECONDS: "${CPP_RUN_TIMEOUT_SECONDS:-5}"
+      RATE_LIMIT_ENABLED: "false"
+      RATE_LIMIT_WINDOW_SECONDS: "${RATE_LIMIT_WINDOW_SECONDS:-60}"
+      RATE_LIMIT_LOGIN_PER_MINUTE: "${RATE_LIMIT_LOGIN_PER_MINUTE:-20}"
+      RATE_LIMIT_ASK_PER_MINUTE: "${RATE_LIMIT_ASK_PER_MINUTE:-60}"
+      RATE_LIMIT_UPLOAD_PER_MINUTE: "${RATE_LIMIT_UPLOAD_PER_MINUTE:-20}"
+    expose:
+      - "8000"
+    volumes:
+      - studymate-data:/app/storage
+    networks:
+      - studymate-internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      NGINX_CLIENT_MAX_BODY_SIZE: "${NGINX_CLIENT_MAX_BODY_SIZE:-110m}"
+      # Keep the filter constrained to the upload-limit variable.  Omitting the
+      # end anchor avoids Compose rendering a literal "$" as "$$".
+      NGINX_ENVSUBST_FILTER: "^NGINX_CLIENT_MAX_BODY_SIZE"
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
+    networks:
+      - studymate-internal
+
+volumes:
+  studymate-data:
+
+networks:
+  studymate-internal:

@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.models.entities import KnowledgePoint, QuestionAttempt, UserKnowledgeStatus
 from app.utils.time import ensure_utc, utc_now
 
-
 INITIAL_MASTERY = 60.0
 # Older rows may still carry the pre-formula default before 60.0 was standardized.
 LEGACY_DEFAULT_MASTERY = 55.0
@@ -68,11 +67,15 @@ def calculate_mastery(
             correct_count += 1
         else:
             wrong_count += 1
-            error_type = classify_error_type(attempt.error_reason, attempt.question_text, attempt.user_answer)
+            error_type = classify_error_type(
+                attempt.error_reason, attempt.question_text, attempt.user_answer
+            )
             error_counter[error_type] += 1
             if _age_days(attempt.created_at) <= 7:
                 recent_wrong_count += 1
-        score += mastery_delta(attempt.difficulty, attempt.is_correct) * recency_weight(attempt.created_at)
+        score += mastery_delta(attempt.difficulty, attempt.is_correct) * recency_weight(
+            attempt.created_at
+        )
 
     if not attempts and status is not None:
         if status.review_count > 0 or status.mastery_score != LEGACY_DEFAULT_MASTERY:
@@ -91,7 +94,9 @@ def calculate_mastery(
         recent_wrong_count,
         main_error_label,
     )
-    mastery_formula = build_mastery_formula(score, level_label, correct_count, wrong_count, recent_wrong_count)
+    mastery_formula = build_mastery_formula(
+        score, level_label, correct_count, wrong_count, recent_wrong_count
+    )
     recent_attempts_summary = build_recent_attempts_summary(attempts[-3:])
 
     return MasteryResult(
@@ -157,11 +162,33 @@ def classify_error_type(reason: str, question_text: str = "", answer_text: str =
         ),
         (
             "procedure_gap",
-            ("步骤", "推导", "过程", "证明", "跳跃", "procedure", "derive", "derivation", "proof", "step"),
+            (
+                "步骤",
+                "推导",
+                "过程",
+                "证明",
+                "跳跃",
+                "procedure",
+                "derive",
+                "derivation",
+                "proof",
+                "step",
+            ),
         ),
         (
             "coding_syntax",
-            ("语法", "编译", "分号", "少分号", "syntax", "compile", "compiler", "cout", "cin", "semicolon"),
+            (
+                "语法",
+                "编译",
+                "分号",
+                "少分号",
+                "syntax",
+                "compile",
+                "compiler",
+                "cout",
+                "cin",
+                "semicolon",
+            ),
         ),
         (
             "careless",
@@ -198,7 +225,7 @@ def build_explanation(
     main_error_label: str,
 ) -> str:
     if correct_count == 0 and wrong_count == 0:
-        return f"该知识点暂无练习记录，系统按初始掌握度 60 分展示，建议先完成基础题建立诊断样本。"
+        return "该知识点暂无练习记录，系统按初始掌握度 60 分展示，建议先完成基础题建立诊断样本。"
     recent = f"最近 7 天答错 {recent_wrong_count} 次，" if recent_wrong_count else ""
     return (
         f"该知识点累计答对 {correct_count} 次、答错 {wrong_count} 次，"
@@ -218,7 +245,11 @@ def build_mastery_formula(
         if score < 60
         else "当前未低于 60 分，但仍会按掌握度排序用于复习建议。"
     )
-    recent_text = f"最近 7 天答错 {recent_wrong_count} 次，会被 1.2 倍权重放大影响。" if recent_wrong_count else "最近 7 天没有新增错误记录。"
+    recent_text = (
+        f"最近 7 天答错 {recent_wrong_count} 次，会被 1.2 倍权重放大影响。"
+        if recent_wrong_count
+        else "最近 7 天没有新增错误记录。"
+    )
     return (
         f"初始掌握度为 {INITIAL_MASTERY:.0f} 分；"
         "答对会按难度加分（基础 +5、提高/易错 +8、考试 +10），"
@@ -238,7 +269,9 @@ def build_recent_attempts_summary(attempts: list[QuestionAttempt]) -> str:
         delta = mastery_delta(attempt.difficulty, attempt.is_correct)
         weight = recency_weight(attempt.created_at)
         reason = attempt.error_reason or "未标注错因"
-        parts.append(f"{attempt.created_at:%Y-%m-%d} {result}，难度 {attempt.difficulty}，基础变化 {delta:+.0f}，权重 {weight:.1f}，{reason}")
+        parts.append(
+            f"{attempt.created_at:%Y-%m-%d} {result}，难度 {attempt.difficulty}，基础变化 {delta:+.0f}，权重 {weight:.1f}，{reason}"
+        )
     return "；".join(parts)
 
 

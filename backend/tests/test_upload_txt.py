@@ -4,7 +4,9 @@ from __future__ import annotations
 def _document_from_course(client, course_id: int, document_id: int) -> dict:
     course_detail = client.get(f"/api/courses/{course_id}")
     assert course_detail.status_code == 200
-    return next(document for document in course_detail.json()["documents"] if document["id"] == document_id)
+    return next(
+        document for document in course_detail.json()["documents"] if document["id"] == document_id
+    )
 
 
 def test_upload_txt_then_ask_outline_and_profile(client):
@@ -66,7 +68,7 @@ def test_delete_uploaded_document(client):
 
     upload_response = client.post(
         f"/api/courses/{course_id}/documents",
-        files={"file": ("delete-me.txt", "用于删除接口测试".encode("utf-8"), "text/plain")},
+        files={"file": ("delete-me.txt", "用于删除接口测试".encode(), "text/plain")},
     )
     assert upload_response.status_code == 200
     document_id = upload_response.json()["id"]

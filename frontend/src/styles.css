@@ -76,6 +76,8 @@ textarea {
   min-height: 78px;
   padding: 0 20px;
   cursor: pointer;
+  color: inherit;
+  text-decoration: none;
 }
 
 .brand-mark {
@@ -159,6 +161,27 @@ textarea {
   margin-top: 3px;
   color: var(--text-sub);
   font-size: 13px;
+}
+
+.topbar-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.mobile-menu-button {
+  display: none;
+  flex: 0 0 auto;
+  font-size: 20px;
+}
+
+.mobile-drawer-content {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+}
+
+.mobile-nav-drawer .el-drawer__body {
+  padding: 0;
 }
 
 .account-strip {
@@ -614,6 +637,8 @@ textarea {
   gap: 12px;
   padding: 13px;
   cursor: pointer;
+  color: inherit;
+  text-decoration: none;
 }
 
 .recent-course strong,
@@ -655,6 +680,8 @@ textarea {
   min-height: 178px;
   padding: 18px;
   cursor: pointer;
+  color: inherit;
+  text-decoration: none;
   transition:
     border-color 0.16s ease,
     transform 0.16s ease,
@@ -731,6 +758,36 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.job-line {
+  color: var(--text-sub);
+}
+
+.job-history {
+  display: grid;
+  gap: 12px;
+}
+
+.job-history-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.job-history-item > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.job-history-item span,
+.job-history-item small {
+  color: var(--text-sub);
 }
 
 .document-item {
@@ -1409,6 +1466,21 @@ pre {
     display: none;
   }
 
+  .mobile-menu-button {
+    display: inline-flex;
+  }
+
+  .topbar {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .topbar-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .main-content {
     padding: 16px;
   }
@@ -1440,6 +1512,14 @@ pre {
 }
 
 @media (max-width: 640px) {
+  .account-strip > span {
+    display: none;
+  }
+
+  .topbar-copy strong {
+    font-size: 16px;
+  }
+
   .metrics-grid,
   .dashboard-metrics,
   .diagnosis-metrics,

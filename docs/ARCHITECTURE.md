@@ -13,7 +13,7 @@ StudyMate 采用前后端分离结构，核心目标是把课程资料学习辅�
 ## 后端路由
 
 - `app/routers/auth.py`：注册、登录、当前用户。
-- `app/routers/courses.py`：课程增删查、课程详情、最近问答。
+- `app/routers/courses.py`：课程增删查、课程详情、最近问答，以及当前用户全部课程的 dashboard summary 聚合。
 - `app/routers/documents.py`：资料上传、解析入库、OCR、图片识别、删除资料。
 - `app/routers/assistant.py`：RAG 问答、复习提纲、专项练习。
 - `app/routers/learning.py`：学习画像、知识图谱、错题记录、复习计划、PDF 报告。
@@ -44,6 +44,7 @@ StudyMate 采用前后端分离结构，核心目标是把课程资料学习辅�
 - `ChatMessage`：课程问答记录和来源元信息。
 - `GeneratedMaterial`：提纲、练习等生成材料。
 - `OcrJob`：扫描版 PDF OCR 任务状态。
+- `ProcessingJob`：统一记录 `document_parse`、`ocr`、`reindex`、`knowledge_sync` 等可恢复处理任务，供任务历史、失败重试和取消使用。
 
 ## 资料入库流程
 
@@ -64,6 +65,24 @@ StudyMate 采用前后端分离结构，核心目标是把课程资料学习辅�
 5. 如果最高分低于 `RAG_MIN_SCORE` 且开启严格来源模式，直接拒答，不调用 LLM。
 6. 如果证据足够，按 `RAG_CONTEXT_MAX_CHARS` 构造上下文并调用模型或 offline 生成。
 7. 返回 `answer_status`、`confidence`、`source_count`、`sources`、`retrieval_provider`、`llm_provider`。
+
+Chroma 是非权威候选索引：查询结果中的文本、document/course metadata 不直接进入上下文。服务按 chunk ID 回查 SQL，并连接仍存活的 Document 与 Course；删除中或已经删除、跨课程、metadata 不一致的候选会被过滤。启动阶段还会用 SQL 全局对账 Chroma 条目。
+
+RAG 可信度增强：
+
+- 构建 context 时会把课程资料片段标注为“不可信资料片段”，片段中的 prompt、命令或角色扮演只能作为普通文本，不会被执行。
+- 默认启用规则 rerank（`RERANK_PROVIDER=rule`），在原检索分数基础上结合问题关键词重合度排序；设置 `RERANK_PROVIDER=none` 可关闭。
+- 模型生成回答后会用来源片段做轻量 answer verification。若关键句缺少足够来源支撑，`answer_status` 会降级为 `low_confidence` 并返回友好拒答。
+
+## 可恢复处理任务
+
+上传解析、OCR、重新索引和知识点同步都会创建 `ProcessingJob`：
+
+1. API 入口先创建 `queued` 任务。
+2. 后台或同步处理阶段更新 `stage`、`progress` 和 `error_message`。
+3. 成功时写入 `completed`、`finished_at`；失败时保留可读错误并置为 `failed`。
+4. 失败或取消任务可通过 `/api/courses/{course_id}/jobs/{job_id}/retry` 重试。
+5. OCR 任务支持主动取消；短任务取消后会阻止任务状态继续覆盖为完成，已写入的资料片段保留。
 
 ## 学习诊断流程
 

@@ -12,7 +12,9 @@ def test_reindex_document_and_course_rebuild_sparse_vectors(client, auth_helpers
     auth_helpers.wait_document_done(course["id"], uploaded["id"])
 
     _corrupt_document_chunks(uploaded["id"])
-    document_response = client.post(f"/api/courses/{course['id']}/documents/{uploaded['id']}/reindex")
+    document_response = client.post(
+        f"/api/courses/{course['id']}/documents/{uploaded['id']}/reindex"
+    )
     assert document_response.status_code == 200, document_response.text
     document_payload = document_response.json()
     assert document_payload["scope"] == "document"

@@ -29,11 +29,11 @@
 
     <el-skeleton :loading="loading" animated :rows="6">
       <section class="course-grid">
-        <article
+        <router-link
           v-for="course in courses"
           :key="course.id"
           class="course-card"
-          @click="openCourse(course)"
+          :to="courseTarget(course)"
         >
           <div class="course-card-header">
             <div>
@@ -47,7 +47,7 @@
             <span>{{ course.chunk_count }} 个片段</span>
             <span>{{ formatDate(course.last_asked_at) }}</span>
           </div>
-        </article>
+        </router-link>
       </section>
     </el-skeleton>
 
@@ -71,12 +71,11 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 
 import { createCourse, getCourses } from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
 
-const router = useRouter();
 const route = useRoute();
 const loading = ref(true);
 const saving = ref(false);
@@ -133,7 +132,7 @@ async function saveCourse() {
   }
 }
 
-function openCourse(course) {
+function courseTarget(course) {
   const tabByModule = {
     qa: "qa",
     diagnosis: "diagnosis",
@@ -141,10 +140,10 @@ function openCourse(course) {
     plan: "diagnosis"
   };
   const tab = tabByModule[route.query.module];
-  router.push({
+  return {
     path: `/courses/${course.id}`,
     query: tab ? { tab } : {}
-  });
+  };
 }
 
 function formatDate(value) {

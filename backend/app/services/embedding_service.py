@@ -12,7 +12,6 @@ import httpx
 
 from app.config import settings
 
-
 logger = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile("[\u4e00-\u9fff]+|[a-zA-Z0-9_]+")
@@ -20,6 +19,7 @@ TOKEN_RE = re.compile("[\u4e00-\u9fff]+|[a-zA-Z0-9_]+")
 _sentence_model: Any | None = None
 _sentence_model_name: str | None = None
 _provider_fallback_reason: str = ""
+_provider_last_effective: str = ""
 
 
 @dataclass(frozen=True)
@@ -45,29 +45,39 @@ def embed_text(text: str, purpose: str = "document") -> list[float]:
 
 
 def embed_texts(texts: list[str], purpose: str = "document") -> EmbeddingBatch:
+    global _provider_last_effective
     provider = settings.embedding_provider
     if provider == "sentence_transformers":
-        return _embed_with_sentence_transformers(texts, purpose)
-    if provider == "openai_compatible":
-        return _embed_with_openai_compatible(texts)
-    return _hash_batch(texts, provider="hash")
+        batch = _embed_with_sentence_transformers(texts, purpose)
+    elif provider == "openai_compatible":
+        batch = _embed_with_openai_compatible(texts)
+    else:
+        batch = _hash_batch(texts, provider="hash")
+    _provider_last_effective = batch.provider
+    return batch
 
 
 def embedding_provider_label() -> str:
     if settings.embedding_provider == "hash":
         return f"hash/{settings.embedding_dimension}d"
+    if _provider_last_effective:
+        return _provider_last_effective
     if _provider_fallback_reason:
         return f"{settings.embedding_provider}->hash ({_provider_fallback_reason})"
     if settings.embedding_provider == "sentence_transformers":
-        return f"sentence_transformers/{settings.embedding_model}"
+        return f"sentence_transformers/{settings.embedding_model} (configured, not verified)"
     if settings.embedding_provider == "openai_compatible":
-        return f"openai_compatible/{settings.embedding_model}"
+        return f"openai_compatible/{settings.embedding_model} (configured, not verified)"
     return settings.embedding_provider
 
 
 def _hash_batch(texts: list[str], provider: str) -> EmbeddingBatch:
     vectors = [_hash_embedding(text) for text in texts]
-    return EmbeddingBatch(vectors=vectors, provider=provider, dimension=len(vectors[0]) if vectors else settings.embedding_dimension)
+    return EmbeddingBatch(
+        vectors=vectors,
+        provider=provider,
+        dimension=len(vectors[0]) if vectors else settings.embedding_dimension,
+    )
 
 
 def _hash_embedding(text: str) -> list[float]:
@@ -113,7 +123,9 @@ def _embed_with_sentence_transformers(texts: list[str], purpose: str) -> Embeddi
     except Exception as exc:  # noqa: BLE001 - embedding must degrade gracefully for demos.
         reason = _short_reason(exc)
         _provider_fallback_reason = reason
-        logger.warning("sentence-transformers embedding unavailable; falling back to hash: %s", reason)
+        logger.warning(
+            "sentence-transformers embedding unavailable; falling back to hash: %s", reason
+        )
         return _hash_batch(texts, provider=f"sentence_transformers->hash ({reason})")
 
 
@@ -162,7 +174,9 @@ def _embed_with_openai_compatible(texts: list[str]) -> EmbeddingBatch:
             response.raise_for_status()
             payload = response.json()
             data = sorted(payload.get("data", []), key=lambda item: item.get("index", 0))
-            vectors.extend(_normalize([float(value) for value in item["embedding"]]) for item in data)
+            vectors.extend(
+                _normalize([float(value) for value in item["embedding"]]) for item in data
+            )
         if len(vectors) != len(texts):
             raise RuntimeError("embedding API 返回数量不匹配")
         _provider_fallback_reason = ""

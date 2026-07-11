@@ -12,17 +12,29 @@
         <el-tab-pane label="注册" name="register" />
       </el-tabs>
 
-      <el-form label-position="top" @submit.prevent>
+      <el-form label-position="top" @submit.prevent="submit">
         <el-form-item v-if="mode === 'register'" label="昵称">
           <el-input v-model="form.display_name" size="large" placeholder="例如：Sunny" />
         </el-form-item>
         <el-form-item label="账号邮箱">
-          <el-input v-model="form.email" size="large" placeholder="demo@studymate.local" />
+          <el-input
+            v-model="form.email"
+            size="large"
+            type="email"
+            autocomplete="username"
+            placeholder="name@example.com"
+          />
         </el-form-item>
         <el-form-item label="密码">
-          <el-input v-model="form.password" size="large" placeholder="studymate-demo" show-password />
+          <el-input
+            v-model="form.password"
+            size="large"
+            autocomplete="current-password"
+            placeholder="请输入密码"
+            show-password
+          />
         </el-form-item>
-        <el-button type="primary" size="large" :loading="submitting" @click="submit">
+        <el-button type="primary" size="large" native-type="submit" :loading="submitting">
           <el-icon><Right /></el-icon>
           {{ mode === "login" ? "登录" : "注册并登录" }}
         </el-button>
@@ -53,8 +65,8 @@ const mode = ref("login");
 const submitting = ref(false);
 const form = reactive({
   display_name: "",
-  email: "demo@studymate.local",
-  password: "studymate-demo"
+  email: "",
+  password: ""
 });
 
 async function submit() {

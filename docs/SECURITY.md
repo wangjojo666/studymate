@@ -36,6 +36,15 @@ local_tempdir_timeout_only
 
 生产化至少需要 Docker/Firecracker 等隔离沙箱、CPU/内存/磁盘/进程数限制、网络隔离、只读根文件系统、非特权用户和审计日志。
 
+预留配置：
+
+```env
+CPP_RUN_SANDBOX=docker
+```
+
+当前版本只记录该配置边界，不默认启用 Docker 运行沙箱。
+代码层面会拒绝 `CPP_RUN_SANDBOX=docker`，因为当前没有真实 Docker 沙箱实现；`APP_ENV=production` 下也会拒绝 `CPP_RUN_ENABLED=true`。
+
 ## Token 与 localStorage
 
 前端将访问 token 存在 `localStorage`，适合课程设计演示，不适合高安全生产场景。生产化需要：
@@ -45,7 +54,21 @@ local_tempdir_timeout_only
 - HttpOnly/SameSite Cookie 或更完善的前端安全策略。
 - XSS 防护和内容安全策略。
 
+后端当前使用 HMAC token。开发环境未配置 `AUTH_SECRET_KEY` 时会为当前进程生成随机值，进程重启后旧 token 自动失效；仓库不再提供可复用固定密钥。`APP_ENV=production` 必须显式注入至少 32 字符、非占位的随机密钥，否则启动失败。这只消除了明显错误配置，不代表已经具备生产级身份认证能力。
+
+`ENABLE_DEMO_USER` 默认关闭，本地演示必须显式启用；生产环境即使误设为 `true` 也会拒绝启动。生产 Compose 覆盖文件使用 `${AUTH_SECRET_KEY:?required}`，并且 backend 服务没有宿主机端口映射，只能通过前端 Nginx 访问。
+
+## BackgroundTasks 边界
+
+资料解析、OCR、重新索引和知识点同步仍基于 FastAPI `BackgroundTasks` 或同步请求执行，不是可靠任务队列。服务进程重启后，内存中的 queued/running 任务不会自动恢复；启动恢复逻辑会把这些任务标记为失败，并提示用户确认结果后手动重试。
+
+取消、完成、失败和重试使用带当前状态条件的 SQL 更新。后台 worker 持有过期 ORM 对象时，只有数据库中的状态仍允许该转换才会写入，从而避免已取消任务重新变成 completed。删除活动资料前会先取消相关任务，并把资料置为不可检索的 deleting 状态。
+
+取消任务也是状态标记：OCR 会在处理循环下一次检查时尽量停止；资料解析、重新索引和知识点同步不能强制中断已经开始的工作，已经写入的结果会保留。生产化需要 Celery/RQ/Arq 等队列、幂等任务设计、任务租约、心跳、去重键和可观测性。
+
 ## SQLite 边界
+
+数据库结构只由 Alembic revision 管理。应用启动不会执行 `create_all()` 或手写 `ALTER TABLE`；已知旧结构通过受限识别和 stamp 后升级，未知/残缺结构会拒绝启动。SQLite 每个应用连接都会执行并验证 `PRAGMA foreign_keys=ON`。
 
 默认 SQLite 适合单机演示。限制包括：
 
@@ -57,7 +80,14 @@ local_tempdir_timeout_only
 
 ## 上传文件与解析
 
-当前上传支持 PDF/PPTX/DOCX/TXT/图片，并有基础大小限制。生产化仍需补充：
+当前上传支持 PDF/PPTX/DOCX/TXT/图片，并有基础大小限制。DOCX/PPTX 已增加 Office zip 防护：
+
+- 限制 zip 内文件数量。
+- 限制单个内部文件解压后大小。
+- 限制总解压后大小。
+- 拒绝异常路径（绝对路径或 `..`）。
+
+生产化仍需补充：
 
 - MIME 类型和文件头校验。
 - 病毒/恶意文档扫描。
@@ -80,10 +110,24 @@ OCR 和图片识别可能调用本地视觉模型或外部服务。限制包括�
 RAG 已增加低置信拒答和来源 score，但仍是原型级可信度控制。生产化需要：
 
 - 更强 embedding 和 rerank。
-- 引文级答案校验。
-- Prompt 注入防护。
-- 对上传资料中的恶意指令做隔离。
+- 更细粒度引文级答案校验。
+- 更强 Prompt 注入防护和红队测试。
+- 对上传资料中的恶意指令做更系统的隔离。
 - 输出内容审计和日志追踪。
+
+当前已做的基础防护：
+
+- 构建 RAG context 时明确标注资料片段是不可信内容。
+- 系统 prompt 禁止执行资料片段中的指令。
+- 生成后用来源片段做轻量 answer verification，不足时降级为 `low_confidence`。
+- Chroma 只返回候选 ID；回答前回查 SQL 中仍存活且属于目标课程的 chunk、document 和 course，索引内文本及 course metadata 不被直接信任。
+- 删除索引失败不会恢复 SQL 已删除内容；启动对账会清理 Chroma 陈旧条目和未完成的物理文件 tombstone。
+
+## 接口限流
+
+当前已增加简单进程内限流，覆盖登录、问答和上传。开发环境默认较宽松，生产环境建议使用 `.env.production.example` 中更严格的默认值。
+
+注意：进程内限流只适合单实例原型。生产化应改为 Redis、网关或反向代理级限流，并按用户、IP、课程和文件大小组合限额。
 
 ## 密钥管理
 

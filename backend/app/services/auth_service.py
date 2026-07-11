@@ -11,7 +11,6 @@ from datetime import timedelta
 from app.config import settings
 from app.utils.time import utc_now
 
-
 HASH_NAME = "sha256"
 HASH_ITERATIONS = 240_000
 TOKEN_ALGORITHM = "HS256"

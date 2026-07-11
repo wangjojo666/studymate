@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib
+import sys
+
 
 def test_cpp_analyze_empty_payload_returns_400(client, auth_helpers):
     course = auth_helpers.create_course("CPP Empty")
@@ -49,7 +52,9 @@ def test_cpp_compile_error_reported(client, auth_helpers):
 
 def test_cpp_sample_run_output(client, auth_helpers):
     course = auth_helpers.create_course("CPP Run")
-    code = "#include <iostream>\nusing namespace std;\nint main(){ int x; cin >> x; cout << x + 1; }"
+    code = (
+        "#include <iostream>\nusing namespace std;\nint main(){ int x; cin >> x; cout << x + 1; }"
+    )
 
     response = client.post(
         f"/api/courses/{course['id']}/cpp/analyze",
@@ -63,3 +68,35 @@ def test_cpp_sample_run_output(client, auth_helpers):
     assert payload["sandbox_level"] == "disabled"
     assert compile_result["executed"] is False
     assert run_result["executed"] is False
+
+
+def test_cpp_run_production_without_sandbox_fails_closed(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("CPP_RUN_ENABLED", "true")
+    monkeypatch.setenv("CPP_RUN_SANDBOX", "none")
+    service = _reload_cpp_compile_service()
+
+    payload = service.compile_and_run_cpp("int main(){return 0;}")
+
+    assert payload["sandbox_level"] == "rejected_no_sandbox"
+    assert payload["compile_result"]["executed"] is False
+    assert "生产环境未配置真实 C++ 沙箱" in payload["compile_result"]["stderr"]
+
+
+def test_cpp_run_docker_sandbox_is_not_reported_available(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("CPP_RUN_ENABLED", "true")
+    monkeypatch.setenv("CPP_RUN_SANDBOX", "docker")
+    service = _reload_cpp_compile_service()
+
+    payload = service.compile_and_run_cpp("int main(){return 0;}")
+
+    assert payload["sandbox_level"] == "unsupported:docker"
+    assert payload["compile_result"]["executed"] is False
+    assert "尚未实现" in payload["compile_result"]["stderr"]
+
+
+def _reload_cpp_compile_service():
+    for module_name in ["app.services.cpp_compile_service", "app.config"]:
+        sys.modules.pop(module_name, None)
+    return importlib.import_module("app.services.cpp_compile_service")
