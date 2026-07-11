@@ -28,6 +28,7 @@ def test_login_rate_limit_returns_429(unauthenticated_client):
     from app.middleware.rate_limit import clear_rate_limit_state
 
     clear_rate_limit_state()
+    object.__setattr__(settings, "rate_limit_enabled", True)
     object.__setattr__(settings, "rate_limit_login_per_minute", 2)
     object.__setattr__(settings, "rate_limit_window_seconds", 60)
 
