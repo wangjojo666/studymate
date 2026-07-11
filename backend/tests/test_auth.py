@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
+
 
 def test_register_and_login_success(unauthenticated_client):
     email = f"auth-{uuid.uuid4().hex[:8]}@example.com"
@@ -40,6 +44,42 @@ def test_duplicate_register_returns_409(unauthenticated_client):
 
     assert duplicate_response.status_code == 409
     assert duplicate_response.json()["detail"] == "账号已存在"
+
+
+def test_register_unique_constraint_race_returns_409_and_rolls_back():
+    from app.routers.auth import register
+    from app.schemas import RegisterRequest
+
+    class RaceSession:
+        rolled_back = False
+
+        def query(self, _model):
+            return self
+
+        def filter(self, *_conditions):
+            return self
+
+        def first(self):
+            return None
+
+        def add(self, _user):
+            return None
+
+        def commit(self):
+            raise IntegrityError("INSERT INTO users", {}, Exception("UNIQUE constraint failed"))
+
+        def rollback(self):
+            self.rolled_back = True
+
+    db = RaceSession()
+    payload = RegisterRequest(email="race@example.com", password="strong-password")
+
+    with pytest.raises(HTTPException) as captured:
+        register(payload, db)
+
+    assert captured.value.status_code == 409
+    assert captured.value.detail == "账号已存在"
+    assert db.rolled_back is True
 
 
 def test_invalid_login_returns_401(unauthenticated_client):

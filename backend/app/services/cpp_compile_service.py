@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import settings
@@ -91,33 +96,20 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
         source.write_text(code, encoding="utf-8")
         command = [compiler, "main.cpp", "-std=c++17", "-Wall", "-Wextra", "-O0", "-o", exe.name]
         command_text = "g++ main.cpp -std=c++17 -Wall -Wextra -O0 -o main"
-        try:
-            compile_process = subprocess.run(
-                command,
-                cwd=tmp_path,
-                capture_output=True,
-                text=True,
-                timeout=settings.cpp_compile_timeout_seconds,
-                check=False,
-            )
-            compile_result = _compile_payload(
-                success=compile_process.returncode == 0,
-                compiler_available=True,
-                command=command_text,
-                stderr=compile_process.stderr,
-            )
-        except subprocess.TimeoutExpired:
-            return {
-                "sandbox_level": sandbox_level,
-                "compile_result": _compile_payload(
-                    success=False,
-                    compiler_available=True,
-                    command=command_text,
-                    stderr=f"编译超过 {settings.cpp_compile_timeout_seconds} 秒，已终止。",
-                    timeout=True,
-                ),
-                "run_result": _run_payload(executed=False),
-            }
+        compile_process = _run_process_limited(
+            command,
+            cwd=tmp_path,
+            timeout=settings.cpp_compile_timeout_seconds,
+            output_limit=settings.cpp_output_limit_bytes,
+        )
+        compile_result = _compile_payload(
+            success=compile_process.returncode == 0,
+            compiler_available=True,
+            command=command_text,
+            stderr=compile_process.stderr,
+            timeout=compile_process.timeout,
+            output_limit_exceeded=compile_process.output_limit_exceeded,
+        )
 
         if not compile_result["success"]:
             return {
@@ -133,31 +125,25 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
                 "run_result": _run_payload(executed=False),
             }
 
-        try:
-            run_process = subprocess.run(
-                [str(exe)],
-                cwd=tmp_path,
-                input=sample_input,
-                capture_output=True,
-                text=True,
-                timeout=settings.cpp_run_timeout_seconds,
-                check=False,
-            )
-            run_result = _run_payload(
-                executed=True,
-                success=run_process.returncode == 0,
-                stdout=run_process.stdout,
-                stderr=run_process.stderr,
-                timeout=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            run_result = _run_payload(
-                executed=True,
-                success=False,
-                stdout=exc.stdout or "",
-                stderr=exc.stderr or "",
-                timeout=True,
-            )
+        run_process = _run_process_limited(
+            [str(exe)],
+            cwd=tmp_path,
+            input_text=sample_input,
+            timeout=settings.cpp_run_timeout_seconds,
+            output_limit=settings.cpp_output_limit_bytes,
+        )
+        run_result = _run_payload(
+            executed=True,
+            success=(
+                run_process.returncode == 0
+                and not run_process.timeout
+                and not run_process.output_limit_exceeded
+            ),
+            stdout=run_process.stdout,
+            stderr=run_process.stderr,
+            timeout=run_process.timeout,
+            output_limit_exceeded=run_process.output_limit_exceeded,
+        )
         return {
             "sandbox_level": sandbox_level,
             "compile_result": compile_result,
@@ -172,6 +158,7 @@ def _compile_payload(
     stderr: str,
     timeout: bool = False,
     executed: bool = True,
+    output_limit_exceeded: bool = False,
 ) -> dict:
     warnings, errors = _split_diagnostics(stderr)
     return {
@@ -183,6 +170,7 @@ def _compile_payload(
         "warnings": warnings,
         "errors": errors,
         "timeout": timeout,
+        "output_limit_exceeded": output_limit_exceeded,
         "executed": executed,
     }
 
@@ -193,6 +181,7 @@ def _run_payload(
     stdout: str = "",
     stderr: str = "",
     timeout: bool = False,
+    output_limit_exceeded: bool = False,
 ) -> dict:
     return {
         "executed": executed,
@@ -200,7 +189,108 @@ def _run_payload(
         "stdout": str(stdout or "").strip()[:8000],
         "stderr": str(stderr or "").strip()[:8000],
         "timeout": timeout,
+        "output_limit_exceeded": output_limit_exceeded,
     }
+
+
+@dataclass(frozen=True)
+class _ProcessResult:
+    returncode: int
+    stdout: str
+    stderr: str
+    timeout: bool
+    output_limit_exceeded: bool
+
+
+def _run_process_limited(
+    command: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+    output_limit: int,
+    input_text: str = "",
+) -> _ProcessResult:
+    """Run a process while bounding captured output before it reaches application memory."""
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(  # noqa: S603 - command is an explicit executable/argument list.
+        command,
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+        start_new_session=os.name != "nt",
+    )
+    limit = max(1024, output_limit)
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    output_limit_hit = threading.Event()
+
+    def drain(name: str, pipe) -> None:
+        while chunk := pipe.read(8192):
+            remaining = limit - len(buffers[name])
+            if remaining > 0:
+                buffers[name].extend(chunk[:remaining])
+            if len(chunk) > remaining:
+                output_limit_hit.set()
+                break
+
+    readers = [
+        threading.Thread(target=drain, args=("stdout", process.stdout), daemon=True),
+        threading.Thread(target=drain, args=("stderr", process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    if process.stdin is not None:
+        try:
+            process.stdin.write(input_text.encode("utf-8"))
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    deadline = time.monotonic() + max(1, timeout)
+    timed_out = False
+    while process.poll() is None:
+        if output_limit_hit.is_set():
+            _terminate_process_tree(process)
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            _terminate_process_tree(process)
+            break
+        time.sleep(0.01)
+
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        _terminate_process_tree(process)
+        process.wait(timeout=2)
+    for reader in readers:
+        reader.join(timeout=1)
+
+    return _ProcessResult(
+        returncode=process.returncode if process.returncode is not None else -1,
+        stdout=buffers["stdout"].decode("utf-8", errors="replace"),
+        stderr=buffers["stderr"].decode("utf-8", errors="replace"),
+        timeout=timed_out,
+        output_limit_exceeded=output_limit_hit.is_set(),
+    )
+
+
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(  # noqa: S603 - fixed system utility and numeric PID.
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _split_diagnostics(stderr: str) -> tuple[list[str], list[str]]:

@@ -127,6 +127,12 @@ class Settings:
             "20" if os.getenv("APP_ENV", "development").lower() == "production" else "240",
         )
     )
+    rate_limit_register_per_minute: int = int(
+        os.getenv(
+            "RATE_LIMIT_REGISTER_PER_MINUTE",
+            "5" if os.getenv("APP_ENV", "development").lower() == "production" else "120",
+        )
+    )
     rate_limit_ask_per_minute: int = int(
         os.getenv(
             "RATE_LIMIT_ASK_PER_MINUTE",
@@ -143,6 +149,7 @@ class Settings:
     cpp_run_sandbox: str = os.getenv("CPP_RUN_SANDBOX", "none").lower()
     cpp_compile_timeout_seconds: int = int(os.getenv("CPP_COMPILE_TIMEOUT_SECONDS", "8"))
     cpp_run_timeout_seconds: int = int(os.getenv("CPP_RUN_TIMEOUT_SECONDS", "5"))
+    cpp_output_limit_bytes: int = int(os.getenv("CPP_OUTPUT_LIMIT_BYTES", str(256 * 1024)))
 
 
 settings = Settings()
