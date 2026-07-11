@@ -29,14 +29,23 @@ def test_login_rate_limit_returns_429(unauthenticated_client):
     from app.middleware.rate_limit import clear_rate_limit_state
 
     clear_rate_limit_state()
+    original_enabled = settings.rate_limit_enabled
+    original_limit = settings.rate_limit_login_per_minute
+    original_window = settings.rate_limit_window_seconds
     object.__setattr__(settings, "rate_limit_enabled", True)
     object.__setattr__(settings, "rate_limit_login_per_minute", 2)
     object.__setattr__(settings, "rate_limit_window_seconds", 60)
 
-    payload = {"email": "nobody@example.com", "password": "wrong-password"}
-    first = unauthenticated_client.post("/api/auth/login", json=payload)
-    second = unauthenticated_client.post("/api/auth/login", json=payload)
-    third = unauthenticated_client.post("/api/auth/login", json=payload)
+    try:
+        payload = {"email": "nobody@example.com", "password": "wrong-password"}
+        first = unauthenticated_client.post("/api/auth/login", json=payload)
+        second = unauthenticated_client.post("/api/auth/login", json=payload)
+        third = unauthenticated_client.post("/api/auth/login", json=payload)
+    finally:
+        object.__setattr__(settings, "rate_limit_enabled", original_enabled)
+        object.__setattr__(settings, "rate_limit_login_per_minute", original_limit)
+        object.__setattr__(settings, "rate_limit_window_seconds", original_window)
+        clear_rate_limit_state()
 
     assert first.status_code == 401
     assert second.status_code == 401
@@ -49,7 +58,9 @@ def test_login_rate_limit_ignores_untrusted_bearer_tokens(unauthenticated_client
     from app.middleware.rate_limit import clear_rate_limit_state
 
     clear_rate_limit_state()
-    original = settings.rate_limit_login_per_minute
+    original_enabled = settings.rate_limit_enabled
+    original_limit = settings.rate_limit_login_per_minute
+    object.__setattr__(settings, "rate_limit_enabled", True)
     object.__setattr__(settings, "rate_limit_login_per_minute", 2)
     try:
         payload = {"email": "nobody@example.com", "password": "wrong-password"}
@@ -62,7 +73,8 @@ def test_login_rate_limit_ignores_untrusted_bearer_tokens(unauthenticated_client
             for index in range(3)
         ]
     finally:
-        object.__setattr__(settings, "rate_limit_login_per_minute", original)
+        object.__setattr__(settings, "rate_limit_enabled", original_enabled)
+        object.__setattr__(settings, "rate_limit_login_per_minute", original_limit)
         clear_rate_limit_state()
 
     assert [response.status_code for response in responses] == [401, 401, 429]
@@ -73,7 +85,9 @@ def test_register_rate_limit_returns_429(unauthenticated_client):
     from app.middleware.rate_limit import clear_rate_limit_state
 
     clear_rate_limit_state()
-    original = settings.rate_limit_register_per_minute
+    original_enabled = settings.rate_limit_enabled
+    original_limit = settings.rate_limit_register_per_minute
+    object.__setattr__(settings, "rate_limit_enabled", True)
     object.__setattr__(settings, "rate_limit_register_per_minute", 1)
     try:
         first = unauthenticated_client.post(
@@ -85,7 +99,8 @@ def test_register_rate_limit_returns_429(unauthenticated_client):
             json={"email": "second@example.com", "password": "strong-password"},
         )
     finally:
-        object.__setattr__(settings, "rate_limit_register_per_minute", original)
+        object.__setattr__(settings, "rate_limit_enabled", original_enabled)
+        object.__setattr__(settings, "rate_limit_register_per_minute", original_limit)
         clear_rate_limit_state()
 
     assert first.status_code == 200
