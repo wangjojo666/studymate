@@ -8,6 +8,47 @@ test("unauthenticated course access redirects to login", async ({ page }) => {
   await expect(page.getByRole("button", { name: "登录" })).toBeVisible();
 });
 
+test("mobile navigation, keyboard access, URL state, and course switching stay in sync", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/login");
+  await page.getByRole("textbox", { name: "账号邮箱" }).fill("demo@studymate.local");
+  await page.getByRole("textbox", { name: "密码" }).fill("studymate-demo");
+  await page.getByRole("textbox", { name: "密码" }).press("Enter");
+  await expect(page).toHaveURL(/\/$/);
+
+  const firstCourse = await createCourseViaApi(page, `E2E Keyboard A ${Date.now()}`);
+  const secondCourse = await createCourseViaApi(page, `E2E Keyboard B ${Date.now()}`);
+
+  const menuButton = page.getByRole("button", { name: "打开主导航" });
+  await expect(menuButton).toBeVisible();
+  await menuButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("navigation", { name: "移动端主导航" })).toBeVisible();
+
+  await page.goto("/courses");
+  const firstCourseLink = page.getByRole("link", { name: new RegExp(firstCourse.name) });
+  await expect(firstCourseLink).toBeVisible();
+  await firstCourseLink.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: firstCourse.name })).toBeVisible();
+
+  await page.getByRole("tab", { name: "AI 问答" }).click();
+  await expect(page).toHaveURL(new RegExp(`/courses/${firstCourse.id}\\?tab=qa$`));
+  await page.getByRole("tab", { name: "专项练习" }).click();
+  await expect(page).toHaveURL(new RegExp(`/courses/${firstCourse.id}\\?tab=practice$`));
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`/courses/${firstCourse.id}\\?tab=qa$`));
+  await expect(page.getByRole("tab", { name: "AI 问答" })).toHaveAttribute("aria-selected", "true");
+
+  await page.evaluate(async ({ courseId }) => {
+    const app = document.querySelector("#app").__vue_app__;
+    await app.config.globalProperties.$router.push(`/courses/${courseId}?tab=docs`);
+  }, { courseId: secondCourse.id });
+  await expect(page.getByRole("heading", { name: secondCourse.name })).toBeVisible();
+  await expect(page.getByRole("heading", { name: firstCourse.name })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "资料库" })).toHaveAttribute("aria-selected", "true");
+});
+
 test("course study workflow", async ({ page }, testInfo) => {
   const courseName = `E2E C++ ${Date.now()}`;
   const notesPath = testInfo.outputPath("polymorphism-notes.txt");
@@ -22,8 +63,8 @@ test("course study workflow", async ({ page }, testInfo) => {
   );
 
   await page.goto("/login");
-  await page.getByPlaceholder("demo@studymate.local").fill("demo@studymate.local");
-  await page.getByPlaceholder("studymate-demo").fill("studymate-demo");
+  await page.getByRole("textbox", { name: "账号邮箱" }).fill("demo@studymate.local");
+  await page.getByRole("textbox", { name: "密码" }).fill("studymate-demo");
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page).toHaveURL(/\/$/);
 
@@ -97,8 +138,8 @@ test("cpp analysis shows local compile was not executed in disabled mode", async
 
 async function loginAsDemo(page) {
   await page.goto("/login");
-  await page.getByPlaceholder("demo@studymate.local").fill("demo@studymate.local");
-  await page.getByPlaceholder("studymate-demo").fill("studymate-demo");
+  await page.getByRole("textbox", { name: "账号邮箱" }).fill("demo@studymate.local");
+  await page.getByRole("textbox", { name: "密码" }).fill("studymate-demo");
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page).toHaveURL(/\/$/);
 }

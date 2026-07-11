@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace dashboard-view" v-loading="loading">
+  <div v-loading="loading" class="workspace dashboard-view">
     <section class="dashboard-hero">
       <div class="hero-copy">
         <span class="eyebrow">StudyMate</span>
@@ -140,18 +140,18 @@
           <el-button text @click="router.push('/courses')">管理</el-button>
         </div>
         <div class="recent-course-list">
-          <article
+          <router-link
             v-for="course in recentCourses"
             :key="course.id"
             class="recent-course"
-            @click="router.push(`/courses/${course.id}`)"
+            :to="`/courses/${course.id}`"
           >
             <div>
               <strong>{{ course.name }}</strong>
               <span>{{ course.document_count }} 份资料 · {{ course.chunk_count }} 个片段</span>
             </div>
             <el-icon><ArrowRight /></el-icon>
-          </article>
+          </router-link>
         </div>
       </div>
 
@@ -184,7 +184,7 @@ import { computed, onMounted, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
 
-import { askCourse, getCourses, getLearningProfile } from "../api/client";
+import { askCourse, getDashboardSummary } from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
 
 const router = useRouter();
@@ -192,42 +192,53 @@ const loading = ref(false);
 const asking = ref(false);
 const courses = ref([]);
 const profiles = ref([]);
+const dashboardSummary = ref(null);
 const selectedCourseId = ref(null);
 const quickQuestion = ref("");
 const quickAnswer = ref("");
+let askSequence = 0;
 
 const totalDocuments = computed(() =>
-  courses.value.reduce((sum, course) => sum + course.document_count, 0)
+  dashboardSummary.value?.summary?.document_count
+    ?? courses.value.reduce((sum, course) => sum + course.document_count, 0)
 );
 const totalKnowledgePoints = computed(() =>
-  profiles.value.reduce((sum, profile) => sum + (profile?.summary?.knowledge_point_count || 0), 0)
+  dashboardSummary.value?.summary?.knowledge_point_count
+    ?? profiles.value.reduce((sum, profile) => sum + (profile?.summary?.knowledge_point_count || 0), 0)
 );
 const weakPoints = computed(() =>
-  profiles.value.flatMap((profile) => profile?.weak_points || []).sort((a, b) => a.mastery_score - b.mastery_score)
+  (dashboardSummary.value?.weak_points || profiles.value.flatMap((profile) => profile?.weak_points || []))
+    .slice()
+    .sort((a, b) => a.mastery_score - b.mastery_score)
 );
-const totalWeakPoints = computed(() => weakPoints.value.length);
+const totalWeakPoints = computed(() =>
+  dashboardSummary.value?.summary?.weak_point_count ?? weakPoints.value.length
+);
 const primaryWeakPoint = computed(() => weakPoints.value[0]);
 const recentCourses = computed(() => courses.value.slice(0, 4));
 const selectedCourse = computed(() => courses.value.find((course) => course.id === selectedCourseId.value));
 const primaryCourse = computed(() => selectedCourse.value || courses.value[0]);
 const todayTasks = computed(() => {
-  const pending = profiles.value.flatMap((profile) => profile?.pending_tasks || []);
+  const pending = dashboardSummary.value?.pending_tasks
+    || profiles.value.flatMap((profile) => profile?.pending_tasks || []);
   if (pending.length) return pending.slice(0, 4);
-  return profiles.value.flatMap((profile) => profile?.recommendations || []).slice(0, 4);
+  return (dashboardSummary.value?.recommendations
+    || profiles.value.flatMap((profile) => profile?.recommendations || [])).slice(0, 4);
 });
 const recentQuestion = computed(() =>
-  newestByDate(profiles.value.flatMap((profile) => profile?.recent_questions || []))
+  newestByDate(dashboardSummary.value?.recent_questions
+    || profiles.value.flatMap((profile) => profile?.recent_questions || []))
 );
 const recentWrongAttempt = computed(() =>
   newestByDate(
-    profiles.value
-      .flatMap((profile) => profile?.recent_attempts || [])
+    (dashboardSummary.value?.recent_attempts
+      || profiles.value.flatMap((profile) => profile?.recent_attempts || []))
       .filter((attempt) => !attempt.is_correct)
   )
 );
 const nearestTask = computed(() => {
-  const datedTasks = profiles.value
-    .flatMap((profile) => profile?.pending_tasks || [])
+  const datedTasks = (dashboardSummary.value?.pending_tasks
+    || profiles.value.flatMap((profile) => profile?.pending_tasks || []))
     .filter((task) => task.deadline)
     .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
   return datedTasks[0] || null;
@@ -249,10 +260,15 @@ const weeklyTrend = computed(() => {
     };
   });
   const byKey = Object.fromEntries(days.map((day) => [day.key, day]));
-  const events = profiles.value.flatMap((profile) => [
-    ...(profile?.recent_questions || []),
-    ...(profile?.recent_attempts || [])
-  ]);
+  const events = dashboardSummary.value
+    ? [
+        ...(dashboardSummary.value.recent_questions || []),
+        ...(dashboardSummary.value.recent_attempts || [])
+      ]
+    : profiles.value.flatMap((profile) => [
+        ...(profile?.recent_questions || []),
+        ...(profile?.recent_attempts || [])
+      ]);
   for (const event of events) {
     const key = event.created_at ? new Date(event.created_at).toISOString().slice(0, 10) : "";
     if (byKey[key]) byKey[key].value += 1;
@@ -276,12 +292,13 @@ onMounted(loadDashboard);
 async function loadDashboard() {
   loading.value = true;
   try {
-    courses.value = await getCourses();
-    selectedCourseId.value = courses.value[0]?.id || null;
-    const topCourses = courses.value.slice(0, 4);
-    profiles.value = await Promise.all(
-      topCourses.map((course) => getLearningProfile(course.id).catch(() => null))
-    );
+    const payload = normalizeDashboardSummary(await getDashboardSummary());
+    dashboardSummary.value = payload;
+    courses.value = payload.courses;
+    profiles.value = [];
+    if (!courses.value.some((course) => course.id === selectedCourseId.value)) {
+      selectedCourseId.value = courses.value[0]?.id || null;
+    }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "首页数据加载失败，请检查后端服务是否启动"));
   } finally {
@@ -298,15 +315,32 @@ async function ask() {
     ElMessage.warning("请输入问题");
     return;
   }
+  const requestCourseId = selectedCourseId.value;
+  const sequence = ++askSequence;
   asking.value = true;
   try {
-    const result = await askCourse(selectedCourseId.value, quickQuestion.value.trim());
+    const result = await askCourse(requestCourseId, quickQuestion.value.trim());
+    if (sequence !== askSequence || requestCourseId !== selectedCourseId.value) return;
     quickAnswer.value = result.answer;
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, "请求失败，请检查后端服务是否启动"));
   } finally {
-    asking.value = false;
+    if (sequence === askSequence) asking.value = false;
   }
+}
+
+function normalizeDashboardSummary(payload) {
+  const data = payload?.data || payload || {};
+  return {
+    ...data,
+    courses: Array.isArray(data.courses) ? data.courses : [],
+    summary: data.summary || {},
+    weak_points: Array.isArray(data.weak_points) ? data.weak_points : [],
+    pending_tasks: Array.isArray(data.pending_tasks) ? data.pending_tasks : [],
+    recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
+    recent_questions: Array.isArray(data.recent_questions) ? data.recent_questions : [],
+    recent_attempts: Array.isArray(data.recent_attempts) ? data.recent_attempts : []
+  };
 }
 
 function goPrimaryCourse(tab) {

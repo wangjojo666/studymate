@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "lint": "eslint . --max-warnings=0",
     "preview": "vite preview --host 127.0.0.1",
+    "test:unit": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -19,8 +21,16 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.0",
     "@vitejs/plugin-vue": "^5.2.1",
-    "vite": "^6.0.7"
+    "@vue/test-utils": "^2.4.11",
+    "axe-core": "^4.12.1",
+    "eslint": "^10.6.0",
+    "eslint-plugin-vue": "^10.9.2",
+    "globals": "^17.7.0",
+    "jsdom": "^29.1.1",
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10"
   }
 }

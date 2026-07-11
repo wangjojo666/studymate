@@ -32,7 +32,7 @@
             type="textarea"
             :rows="3"
             placeholder="例如：分析下面程序输出，说明虚函数如何实现运行时多态。"
-            @update:model-value="form.problem_text = $event"
+            @update:model-value="updateForm('problem_text', $event)"
           />
         </el-form-item>
         <el-form-item label="题目代码或参考代码">
@@ -41,7 +41,7 @@
             type="textarea"
             :rows="12"
             placeholder="粘贴 C++ 题目代码、参考代码或截图识别后的代码文本"
-            @update:model-value="form.code_text = $event"
+            @update:model-value="updateForm('code_text', $event)"
           />
         </el-form-item>
         <el-form-item label="用户代码">
@@ -50,7 +50,7 @@
             type="textarea"
             :rows="8"
             placeholder="可选：粘贴自己的答案，系统会判断可能的错误和遗漏考点"
-            @update:model-value="form.user_code = $event"
+            @update:model-value="updateForm('user_code', $event)"
           />
         </el-form-item>
         <el-form-item label="样例输入">
@@ -59,7 +59,7 @@
             type="textarea"
             :rows="3"
             placeholder="可选：提供 stdin 样例，编译通过后会限时运行"
-            @update:model-value="form.sample_input = $event"
+            @update:model-value="updateForm('sample_input', $event)"
           />
         </el-form-item>
       </el-form>
@@ -165,7 +165,11 @@ defineProps({
   analyzing: { type: Boolean, default: false }
 });
 
-const emit = defineEmits(["analyze", "readFile"]);
+const emit = defineEmits(["analyze", "readFile", "updateForm"]);
+
+function updateForm(field, value) {
+  emit("updateForm", field, value);
+}
 
 function readFile(uploadFile) {
   emit("readFile", uploadFile);

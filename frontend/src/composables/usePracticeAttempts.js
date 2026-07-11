@@ -1,7 +1,7 @@
-import { ref, unref } from "vue";
+import { onBeforeUnmount, ref, unref } from "vue";
 import { ElMessage } from "element-plus";
 
-import { submitPracticeAttempt } from "../api/client";
+import { isRequestCanceled, submitPracticeAttempt } from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
 
 export function usePracticeAttempts({
@@ -12,8 +12,14 @@ export function usePracticeAttempts({
   loadCourse
 }) {
   const practiceAttemptState = ref({});
+  let requestController = new AbortController();
+  let requestVersion = 0;
+
+  onBeforeUnmount(cancelPracticeRequests);
 
   function resetPracticeState(items) {
+    cancelPracticeRequests();
+    requestController = new AbortController();
     practiceAttemptState.value = Object.fromEntries(
       items.map((item) => [
         practiceItemKey(item),
@@ -30,6 +36,8 @@ export function usePracticeAttempts({
   async function submitPracticeResult(item, isCorrect) {
     const key = practiceItemKey(item);
     const state = ensurePracticeState(item);
+    const requestCourseId = String(unref(courseId));
+    const version = requestVersion;
     state.submitting = isCorrect ? "correct" : "wrong";
     try {
       await submitPracticeAttempt(unref(courseId), {
@@ -40,14 +48,17 @@ export function usePracticeAttempts({
         is_correct: isCorrect,
         error_reason: isCorrect ? "" : (state.errorReason || "未标注错因"),
         difficulty: unref(practiceDifficulty)
-      });
+      }, { signal: requestController.signal });
+      if (!isCurrentRequest(version, requestCourseId)) return;
       state.result = isCorrect ? "已标记答对" : "已记录错因";
       practiceAttemptState.value = { ...practiceAttemptState.value, [key]: state };
-      await loadCourse();
+      await loadCourse({ silent: true, force: true, expectedCourseId: requestCourseId });
     } catch (error) {
-      ElMessage.error(getApiErrorMessage(error, "练习记录提交失败"));
+      if (!isRequestCanceled(error) && isCurrentRequest(version, requestCourseId)) {
+        ElMessage.error(getApiErrorMessage(error, "练习记录提交失败"));
+      }
     } finally {
-      state.submitting = "";
+      if (isCurrentRequest(version, requestCourseId)) state.submitting = "";
     }
   }
 
@@ -66,6 +77,15 @@ export function usePracticeAttempts({
       names.some((name) => point.name === name || point.name.includes(name) || name.includes(point.name))
     );
     return matched?.id || null;
+  }
+
+  function cancelPracticeRequests() {
+    requestVersion += 1;
+    requestController.abort();
+  }
+
+  function isCurrentRequest(version, requestCourseId) {
+    return version === requestVersion && requestCourseId === String(unref(courseId));
   }
 
   return {

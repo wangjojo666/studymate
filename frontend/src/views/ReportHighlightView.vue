@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace report-view" v-loading="loading">
+  <div v-loading="loading" class="workspace report-view">
     <section class="report-hero">
       <div>
         <span class="eyebrow">Report Showcase</span>

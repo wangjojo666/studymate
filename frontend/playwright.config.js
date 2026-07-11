@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const e2eStorage = path.join(__dirname, ".e2e-storage");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const nodeCommand = process.platform === "win32" ? "node.exe" : "node";
-const isCI = Boolean(process.env.CI);
+const backendPort = 18080;
+const frontendPort = 15173;
 if (!process.env.TEST_WORKER_INDEX) {
   fs.rmSync(e2eStorage, { recursive: true, force: true });
 }
@@ -26,7 +28,15 @@ const backendEnv = {
   RERANK_PROVIDER: "rule",
   CPP_RUN_ENABLED: "false",
   RATE_LIMIT_ENABLED: "false",
-  APP_ENV: "development"
+  APP_ENV: "development",
+  ENABLE_DEMO_USER: "true",
+  AUTH_SECRET_KEY: process.env.E2E_AUTH_SECRET_KEY || crypto.randomBytes(32).toString("hex"),
+  E2E_BACKEND_PORT: String(backendPort)
+};
+
+const frontendEnv = {
+  ...process.env,
+  VITE_API_PROXY_TARGET: `http://127.0.0.1:${backendPort}`
 };
 
 export default defineConfig({
@@ -37,7 +47,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: `http://127.0.0.1:${frontendPort}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure"
   },
@@ -46,15 +56,16 @@ export default defineConfig({
       command: `${nodeCommand} scripts/start-e2e-backend.mjs`,
       cwd: __dirname,
       env: backendEnv,
-      url: "http://127.0.0.1:8000/api/health",
-      reuseExistingServer: !isCI,
+      url: `http://127.0.0.1:${backendPort}/api/health`,
+      reuseExistingServer: false,
       timeout: 180_000
     },
     {
-      command: `${npmCommand} run dev -- --port 5173`,
+      command: `${npmCommand} run dev -- --port ${frontendPort}`,
       cwd: __dirname,
-      url: "http://127.0.0.1:5173",
-      reuseExistingServer: !isCI,
+      env: frontendEnv,
+      url: `http://127.0.0.1:${frontendPort}`,
+      reuseExistingServer: false,
       timeout: 120_000
     }
   ],

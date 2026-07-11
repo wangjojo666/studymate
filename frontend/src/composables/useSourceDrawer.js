@@ -1,15 +1,23 @@
-import { ref, unref } from "vue";
+import { onBeforeUnmount, ref, unref } from "vue";
 import { ElMessage } from "element-plus";
 
-import { getSourceChunk } from "../api/client";
+import { getSourceChunk, isRequestCanceled } from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
 
 export function useSourceDrawer({ courseId, lastRetrievalProvider }) {
   const sourceDrawerOpen = ref(false);
   const activeSource = ref(null);
   const sourceLoading = ref(false);
+  let requestController = null;
+  let requestVersion = 0;
+
+  onBeforeUnmount(resetSourceDrawer);
 
   async function openSource(source, retrievalProvider = "") {
+    requestController?.abort();
+    requestController = new AbortController();
+    const version = ++requestVersion;
+    const requestCourseId = String(unref(courseId));
     const provider = source.retrieval_provider || retrievalProvider || unref(lastRetrievalProvider) || "";
     activeSource.value = {
       ...source,
@@ -26,16 +34,19 @@ export function useSourceDrawer({ courseId, lastRetrievalProvider }) {
       const detail = await getSourceChunk(unref(courseId), source.chunk_id, {
         score: source.score,
         retrieval_provider: provider
-      });
+      }, { signal: requestController.signal });
+      if (version !== requestVersion || requestCourseId !== String(unref(courseId))) return;
       activeSource.value = {
         ...source,
         ...detail,
         retrieval_provider: detail.retrieval_provider || provider
       };
     } catch (error) {
-      ElMessage.error(getApiErrorMessage(error, "来源片段加载失败"));
+      if (!isRequestCanceled(error) && version === requestVersion) {
+        ElMessage.error(getApiErrorMessage(error, "来源片段加载失败"));
+      }
     } finally {
-      sourceLoading.value = false;
+      if (version === requestVersion) sourceLoading.value = false;
     }
   }
 
@@ -56,12 +67,22 @@ export function useSourceDrawer({ courseId, lastRetrievalProvider }) {
     }
   }
 
+  function resetSourceDrawer() {
+    requestVersion += 1;
+    requestController?.abort();
+    requestController = null;
+    sourceDrawerOpen.value = false;
+    activeSource.value = null;
+    sourceLoading.value = false;
+  }
+
   return {
     sourceDrawerOpen,
     activeSource,
     sourceLoading,
     openSource,
-    copySourceReference
+    copySourceReference,
+    resetSourceDrawer
   };
 }
 

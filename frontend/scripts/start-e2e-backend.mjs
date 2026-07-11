@@ -16,6 +16,7 @@ const venvPython = process.platform === "win32"
 const requirementsPath = path.join(backendDir, "requirements.txt");
 const markerPath = path.join(venvDir, ".studymate-e2e-ready.json");
 const prepareOnly = process.argv.includes("--prepare");
+const backendPort = parseBackendPort(process.env.E2E_BACKEND_PORT || "18080");
 
 const backendPython = resolveBackendPython();
 
@@ -25,7 +26,7 @@ if (prepareOnly) {
 
 const server = spawn(
   backendPython,
-  ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+  ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(backendPort)],
   {
     cwd: backendDir,
     env: process.env,
@@ -163,4 +164,12 @@ function isSupportedPython(candidate) {
     { stdio: "ignore" }
   );
   return result.status === 0;
+}
+
+function parseBackendPort(value) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("E2E_BACKEND_PORT must be an integer between 1 and 65535.");
+  }
+  return port;
 }

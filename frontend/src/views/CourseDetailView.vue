@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace course-detail" v-loading="loading">
+  <div v-loading="loading" class="workspace course-detail">
     <section class="course-hero">
       <div>
         <el-button text @click="router.push('/courses')">
@@ -19,6 +19,7 @@
           :show-file-list="false"
           :http-request="handleUpload"
           accept=".pdf,.pptx,.docx,.txt,.png,.jpg,.jpeg,.webp"
+          multiple
         >
           <el-button type="primary" :loading="uploading">
             <el-icon><Upload /></el-icon>
@@ -112,6 +113,7 @@
           :analyzing="analyzingCpp"
           @analyze="analyzeCpp"
           @read-file="readCppFile"
+          @update-form="updateCppForm"
         />
       </el-tab-pane>
 
@@ -135,7 +137,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 
@@ -146,7 +148,15 @@ import CourseDocumentsPanel from "../components/course/CourseDocumentsPanel.vue"
 import CourseOutlinePanel from "../components/course/CourseOutlinePanel.vue";
 import CoursePracticePanel from "../components/course/CoursePracticePanel.vue";
 import CourseQaPanel from "../components/course/CourseQaPanel.vue";
-import { analyzeCppCode, askCourse, generateOutline, generatePractice, getCourse, getLearningProfile } from "../api/client";
+import {
+  analyzeCppCode,
+  askCourse,
+  generateOutline,
+  generatePractice,
+  getCourse,
+  getLearningProfile,
+  isRequestCanceled
+} from "../api/client";
 import { getApiErrorMessage } from "../api/errors";
 import { useCourseDocumentProcessing } from "../composables/useCourseDocumentProcessing";
 import { usePracticeAttempts } from "../composables/usePracticeAttempts";
@@ -186,6 +196,11 @@ const cppForm = reactive({
   sample_input: ""
 });
 
+let loadController = null;
+let sessionController = new AbortController();
+let loadSequence = 0;
+let loadPromise = null;
+
 const knowledgePointOptions = computed(() => learningProfile.value?.knowledge_points || []);
 const diagnosisWeakPoints = computed(() => (learningProfile.value?.weak_points || []).slice(0, 5));
 const ringStyle = computed(() => {
@@ -217,6 +232,7 @@ const {
   retryJob,
   cancelJob,
   syncDocumentPolling,
+  resetProcessingState,
   activeOcrJob,
   ocrProgress,
   ocrProgressStatus,
@@ -233,7 +249,8 @@ const {
   activeSource,
   sourceLoading,
   openSource,
-  copySourceReference
+  copySourceReference,
+  resetSourceDrawer
 } = useSourceDrawer({ courseId, lastRetrievalProvider });
 
 const {
@@ -250,51 +267,100 @@ const {
   loadCourse
 });
 
-onMounted(loadCourse);
-
 watch(
   () => route.query.tab,
   (tab) => {
     activeTab.value = tabFromQuery(tab);
-  }
+  },
+  { immediate: true }
 );
 
-async function loadCourse() {
-  loading.value = true;
-  try {
-    const [courseData, profileData] = await Promise.all([
-      getCourse(props.id),
-      getLearningProfile(props.id)
-    ]);
-    course.value = courseData;
-    learningProfile.value = profileData;
-    syncDocumentPolling(courseData.documents || []);
-    messages.value = (courseData.recent_messages || [])
-      .slice()
-      .reverse()
-      .map((message) => ({
-        id: message.id,
-        question: message.question,
-        answer: message.answer,
-        answer_status: message.answer_status || "answered",
-        confidence: message.confidence || "medium",
-        source_count: message.source_count ?? message.sources?.length ?? 0,
-        sources: message.sources || [],
-        retrieval_provider: message.retrieval_provider || "",
-        llm_provider: message.llm_provider || ""
-      }));
-    const latestMessage = messages.value[messages.value.length - 1];
-    if (latestMessage) {
-      lastAnswerStatus.value = latestMessage.answer_status || "answered";
-      lastConfidence.value = latestMessage.confidence || "medium";
-      lastRetrievalProvider.value = courseData.recent_messages?.[0]?.retrieval_provider || lastRetrievalProvider.value;
-      lastLlmProvider.value = courseData.recent_messages?.[0]?.llm_provider || lastLlmProvider.value;
+watch(
+  activeTab,
+  (tab) => {
+    if (route.query.tab === tab) return;
+    const destination = { query: { ...route.query, tab } };
+    if (route.query.tab) {
+      void router.push(destination);
+    } else {
+      void router.replace(destination);
     }
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "课程加载失败，请检查后端服务是否启动"));
-  } finally {
-    loading.value = false;
-  }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => props.id,
+  () => {
+    beginCourseSession();
+  },
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  loadController?.abort();
+  sessionController.abort();
+});
+
+async function loadCourse({ silent = false, force = false, signal, expectedCourseId } = {}) {
+  const requestCourseId = String(expectedCourseId ?? props.id);
+  if (requestCourseId !== String(props.id)) return null;
+  if (loadPromise && !force) return loadPromise;
+  if (force) loadController?.abort();
+
+  const sequence = ++loadSequence;
+  const controller = new AbortController();
+  const sessionSignal = sessionController.signal;
+  const abortFromExternal = () => controller.abort();
+  signal?.addEventListener("abort", abortFromExternal, { once: true });
+  if (signal?.aborted || sessionSignal.aborted) controller.abort();
+  const abortFromSession = () => controller.abort();
+  sessionSignal.addEventListener("abort", abortFromSession, { once: true });
+  loadController = controller;
+  if (!silent) loading.value = true;
+
+  const request = (async () => {
+    try {
+      const [courseResult, profileResult] = await Promise.allSettled([
+        getCourse(requestCourseId, { signal: controller.signal }),
+        getLearningProfile(requestCourseId, { signal: controller.signal })
+      ]);
+      if (!isLatestCourseRequest(sequence, requestCourseId)) return null;
+      if (courseResult.status === "rejected") throw courseResult.reason;
+
+      const courseData = courseResult.value;
+      course.value = courseData;
+      learningProfile.value = profileResult.status === "fulfilled" ? profileResult.value : null;
+      syncDocumentPolling(courseData.documents || []);
+      messages.value = mapRecentMessages(courseData.recent_messages || []);
+      const latestMessage = messages.value[messages.value.length - 1];
+      if (latestMessage) {
+        lastAnswerStatus.value = latestMessage.answer_status || "answered";
+        lastConfidence.value = latestMessage.confidence || "medium";
+        lastRetrievalProvider.value = courseData.recent_messages?.[0]?.retrieval_provider || "未调用";
+        lastLlmProvider.value = courseData.recent_messages?.[0]?.llm_provider || "未调用";
+      }
+      if (profileResult.status === "rejected" && !isRequestCanceled(profileResult.reason) && !silent) {
+        ElMessage.warning("课程已加载，但学习画像暂时不可用");
+      }
+      return courseData;
+    } catch (error) {
+      if (!isRequestCanceled(error) && isLatestCourseRequest(sequence, requestCourseId) && !silent) {
+        ElMessage.error(getApiErrorMessage(error, "课程加载失败，请检查后端服务是否启动"));
+      }
+      return null;
+    } finally {
+      signal?.removeEventListener("abort", abortFromExternal);
+      sessionSignal.removeEventListener("abort", abortFromSession);
+      if (sequence === loadSequence) {
+        loadController = null;
+        loadPromise = null;
+        if (!silent) loading.value = false;
+      }
+    }
+  })();
+  loadPromise = request;
+  return request;
 }
 
 async function ask() {
@@ -303,10 +369,12 @@ async function ask() {
     return;
   }
   asking.value = true;
+  const requestCourseId = String(props.id);
   const currentQuestion = question.value.trim();
   question.value = "";
   try {
-    const result = await askCourse(props.id, currentQuestion);
+    const result = await askCourse(requestCourseId, currentQuestion, sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
     lastLlmProvider.value = result.llm_provider || result.provider || "unknown";
     lastRetrievalProvider.value = result.retrieval_provider || "unknown";
     lastAnswerStatus.value = result.answer_status || "answered";
@@ -322,47 +390,57 @@ async function ask() {
       retrieval_provider: result.retrieval_provider || "",
       llm_provider: result.llm_provider || result.provider || ""
     });
-    await loadCourse();
+    await loadCourse({ silent: true, force: true, expectedCourseId: requestCourseId });
   } catch (error) {
-    question.value = currentQuestion;
-    ElMessage.error(getApiErrorMessage(error, "请求失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      question.value = currentQuestion;
+      ElMessage.error(getApiErrorMessage(error, "请求失败，请检查后端服务是否启动"));
+    }
   } finally {
-    asking.value = false;
+    if (isCurrentCourse(requestCourseId)) asking.value = false;
   }
 }
 
 async function makeOutline() {
+  const requestCourseId = String(props.id);
   generatingOutline.value = true;
   try {
-    const result = await generateOutline(props.id);
+    const result = await generateOutline(requestCourseId, sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
     lastLlmProvider.value = result.provider || "unknown";
     outline.value = result.content;
     outlineSources.value = result.sources;
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "复习提纲生成失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      ElMessage.error(getApiErrorMessage(error, "复习提纲生成失败，请检查后端服务是否启动"));
+    }
   } finally {
-    generatingOutline.value = false;
+    if (isCurrentCourse(requestCourseId)) generatingOutline.value = false;
   }
 }
 
 async function makePractice() {
+  const requestCourseId = String(props.id);
   generatingPractice.value = true;
   try {
-    const result = await generatePractice(props.id, {
+    const result = await generatePractice(requestCourseId, {
       count: practiceCount.value,
       difficulty: practiceDifficulty.value,
       knowledge_point_id: practiceKnowledgePointId.value || null
-    });
+    }, sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
     lastLlmProvider.value = result.provider || "unknown";
     practice.value = result.content;
     practiceSources.value = result.sources || [];
     practiceItems.value = result.items || [];
     resetPracticeState(practiceItems.value);
-    await loadCourse();
+    await loadCourse({ silent: true, force: true, expectedCourseId: requestCourseId });
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "练习题生成失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      ElMessage.error(getApiErrorMessage(error, "练习题生成失败，请检查后端服务是否启动"));
+    }
   } finally {
-    generatingPractice.value = false;
+    if (isCurrentCourse(requestCourseId)) generatingPractice.value = false;
   }
 }
 
@@ -371,15 +449,94 @@ async function analyzeCpp() {
     ElMessage.warning("请先填写题干或 C++ 代码");
     return;
   }
+  const requestCourseId = String(props.id);
   analyzingCpp.value = true;
   try {
-    cppAnalysis.value = await analyzeCppCode(props.id, cppForm);
-    lastLlmProvider.value = cppAnalysis.value.provider || "rule/offline";
+    const result = await analyzeCppCode(requestCourseId, cppForm, sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
+    cppAnalysis.value = result;
+    lastLlmProvider.value = result.provider || "rule/offline";
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "C++ 代码分析失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      ElMessage.error(getApiErrorMessage(error, "C++ 代码分析失败，请检查后端服务是否启动"));
+    }
   } finally {
-    analyzingCpp.value = false;
+    if (isCurrentCourse(requestCourseId)) analyzingCpp.value = false;
   }
+}
+
+function beginCourseSession() {
+  loadSequence += 1;
+  loadController?.abort();
+  loadController = null;
+  loadPromise = null;
+  sessionController.abort();
+  sessionController = new AbortController();
+  resetCourseState();
+  resetProcessingState();
+  resetSourceDrawer();
+  resetPracticeState([]);
+  void loadCourse({ force: true, expectedCourseId: props.id });
+}
+
+function resetCourseState() {
+  course.value = null;
+  learningProfile.value = null;
+  loading.value = false;
+  asking.value = false;
+  generatingOutline.value = false;
+  generatingPractice.value = false;
+  analyzingCpp.value = false;
+  question.value = "";
+  messages.value = [];
+  outline.value = "";
+  outlineSources.value = [];
+  practice.value = "";
+  practiceSources.value = [];
+  practiceItems.value = [];
+  practiceCount.value = 10;
+  practiceDifficulty.value = "basic";
+  practiceKnowledgePointId.value = null;
+  lastLlmProvider.value = "未调用";
+  lastRetrievalProvider.value = "未调用";
+  lastAnswerStatus.value = "未调用";
+  lastConfidence.value = "low";
+  cppAnalysis.value = null;
+  Object.assign(cppForm, {
+    problem_text: "",
+    code_text: "",
+    user_code: "",
+    sample_input: ""
+  });
+}
+
+function mapRecentMessages(recentMessages) {
+  return recentMessages
+    .slice()
+    .reverse()
+    .map((message) => ({
+      id: message.id,
+      question: message.question,
+      answer: message.answer,
+      answer_status: message.answer_status || "answered",
+      confidence: message.confidence || "medium",
+      source_count: message.source_count ?? message.sources?.length ?? 0,
+      sources: message.sources || [],
+      retrieval_provider: message.retrieval_provider || "",
+      llm_provider: message.llm_provider || ""
+    }));
+}
+
+function isLatestCourseRequest(sequence, requestCourseId) {
+  return sequence === loadSequence && isCurrentCourse(requestCourseId);
+}
+
+function isCurrentCourse(requestCourseId) {
+  return String(props.id) === String(requestCourseId);
+}
+
+function sessionOptions() {
+  return { signal: sessionController.signal };
 }
 
 function readCppFile(uploadFile) {
@@ -394,6 +551,10 @@ function readCppFile(uploadFile) {
     ElMessage.error("代码文件读取失败");
   };
   reader.readAsText(rawFile, "utf-8");
+}
+
+function updateCppForm(field, value) {
+  if (Object.hasOwn(cppForm, field)) cppForm[field] = value;
 }
 
 function tabFromQuery(tab) {

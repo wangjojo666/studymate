@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace diagnosis-view" v-loading="loading">
+  <div v-loading="loading" class="workspace diagnosis-view">
     <section class="diagnosis-hero">
       <div>
         <el-button text @click="router.push(`/courses/${id}?tab=diagnosis`)">
@@ -271,7 +271,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
 import VChart from "vue-echarts";
@@ -291,6 +291,7 @@ import {
   getKnowledgeGraph,
   getLearningProfile,
   getWrongAttempts,
+  isRequestCanceled,
   downloadLearningReport,
   submitPracticeAttempt,
   updateReviewTask
@@ -323,6 +324,10 @@ const loading = ref(false);
 const submittingAttempt = ref(false);
 const generatingPlan = ref(false);
 const exportingReport = ref(false);
+let loadController = null;
+let sessionController = new AbortController();
+let loadSequence = 0;
+let loadPromise = null;
 
 const attemptForm = reactive({
   knowledge_point_id: null,
@@ -482,26 +487,71 @@ const graphOption = computed(() => {
   };
 });
 
-onMounted(loadAll);
+watch(
+  () => props.id,
+  () => beginCourseSession(),
+  { immediate: true }
+);
 
-async function loadAll() {
-  loading.value = true;
-  try {
-    const [courseData, profileData, graphData, wrongData] = await Promise.all([
-      getCourse(props.id),
-      getLearningProfile(props.id),
-      getKnowledgeGraph(props.id),
-      getWrongAttempts(props.id)
-    ]);
-    course.value = courseData;
-    profile.value = profileData;
-    graph.value = graphData;
-    wrongAttempts.value = wrongData;
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "学习诊断加载失败，请检查后端服务是否启动"));
-  } finally {
-    loading.value = false;
-  }
+onBeforeUnmount(() => {
+  loadController?.abort();
+  sessionController.abort();
+});
+
+async function loadAll({ silent = false, force = false, expectedCourseId } = {}) {
+  const requestCourseId = String(expectedCourseId ?? props.id);
+  if (!isCurrentCourse(requestCourseId)) return null;
+  if (loadPromise && !force) return loadPromise;
+  if (force) loadController?.abort();
+
+  const sequence = ++loadSequence;
+  const controller = new AbortController();
+  const sessionSignal = sessionController.signal;
+  const abortFromSession = () => controller.abort();
+  sessionSignal.addEventListener("abort", abortFromSession, { once: true });
+  if (sessionSignal.aborted) controller.abort();
+  loadController = controller;
+  if (!silent) loading.value = true;
+
+  const request = (async () => {
+    try {
+      const results = await Promise.allSettled([
+        getCourse(requestCourseId, { signal: controller.signal }),
+        getLearningProfile(requestCourseId, { signal: controller.signal }),
+        getKnowledgeGraph(requestCourseId, { signal: controller.signal }),
+        getWrongAttempts(requestCourseId, { signal: controller.signal })
+      ]);
+      if (!isLatestRequest(sequence, requestCourseId)) return null;
+      const [courseResult, profileResult, graphResult, wrongResult] = results;
+      if (courseResult.status === "rejected") throw courseResult.reason;
+
+      course.value = courseResult.value;
+      profile.value = profileResult.status === "fulfilled" ? profileResult.value : null;
+      graph.value = graphResult.status === "fulfilled" ? graphResult.value : null;
+      wrongAttempts.value = wrongResult.status === "fulfilled" ? wrongResult.value : [];
+
+      const unavailableSections = [profileResult, graphResult, wrongResult]
+        .filter((result) => result.status === "rejected" && !isRequestCanceled(result.reason)).length;
+      if (unavailableSections && !silent) {
+        ElMessage.warning(`课程已加载，${unavailableSections} 个诊断分区暂不可用`);
+      }
+      return courseResult.value;
+    } catch (error) {
+      if (!isRequestCanceled(error) && isLatestRequest(sequence, requestCourseId) && !silent) {
+        ElMessage.error(getApiErrorMessage(error, "学习诊断加载失败，请检查后端服务是否启动"));
+      }
+      return null;
+    } finally {
+      sessionSignal.removeEventListener("abort", abortFromSession);
+      if (sequence === loadSequence) {
+        loadController = null;
+        loadPromise = null;
+        if (!silent) loading.value = false;
+      }
+    }
+  })();
+  loadPromise = request;
+  return request;
 }
 
 function prepareAttempt(point) {
@@ -514,19 +564,23 @@ async function saveAttempt() {
     ElMessage.warning("请填写题目");
     return;
   }
+  const requestCourseId = String(props.id);
   submittingAttempt.value = true;
   try {
-    const result = await submitPracticeAttempt(props.id, {
+    const result = await submitPracticeAttempt(requestCourseId, {
       ...attemptForm,
       knowledge_point_id: attemptForm.knowledge_point_id || null
-    });
+    }, sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
     ElMessage.success(result.next_training?.description || "练习结果已记录");
     resetAttemptForm();
-    await loadAll();
+    await loadAll({ silent: true, force: true, expectedCourseId: requestCourseId });
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "记录失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      ElMessage.error(getApiErrorMessage(error, "记录失败，请检查后端服务是否启动"));
+    }
   } finally {
-    submittingAttempt.value = false;
+    if (isCurrentCourse(requestCourseId)) submittingAttempt.value = false;
   }
 }
 
@@ -535,42 +589,96 @@ async function makeReviewPlan() {
     ElMessage.warning("请选择考试日期");
     return;
   }
+  const requestCourseId = String(props.id);
   generatingPlan.value = true;
   try {
-    plan.value = await generateReviewPlan(props.id, reviewForm);
-    await loadAll();
+    const result = await generateReviewPlan(requestCourseId, reviewForm, sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
+    plan.value = result;
+    await loadAll({ silent: true, force: true, expectedCourseId: requestCourseId });
     ElMessage.success("复习计划已生成");
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "复习计划生成失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      ElMessage.error(getApiErrorMessage(error, "复习计划生成失败，请检查后端服务是否启动"));
+    }
   } finally {
-    generatingPlan.value = false;
+    if (isCurrentCourse(requestCourseId)) generatingPlan.value = false;
   }
 }
 
 async function markTaskDone(task) {
+  const requestCourseId = String(props.id);
   try {
-    const updated = await updateReviewTask(props.id, task.id, "done");
+    const updated = await updateReviewTask(requestCourseId, task.id, "done", sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
     if (plan.value?.tasks?.length) {
       plan.value.tasks = plan.value.tasks.map((item) => (item.id === updated.id ? updated : item));
     }
     ElMessage.success("已更新掌握度");
-    await loadAll();
+    await loadAll({ silent: true, force: true, expectedCourseId: requestCourseId });
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "任务更新失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      ElMessage.error(getApiErrorMessage(error, "任务更新失败，请检查后端服务是否启动"));
+    }
   }
 }
 
 async function downloadReport() {
+  const requestCourseId = String(props.id);
   exportingReport.value = true;
   try {
-    const blob = await downloadLearningReport(props.id);
-    saveBlob(blob, `studymate-course-${props.id}-learning-report.pdf`);
+    const blob = await downloadLearningReport(requestCourseId, sessionOptions());
+    if (!isCurrentCourse(requestCourseId)) return;
+    saveBlob(blob, `studymate-course-${requestCourseId}-learning-report.pdf`);
     ElMessage.success("报告已导出");
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, "报告导出失败，请检查后端服务是否启动"));
+    if (!isRequestCanceled(error) && isCurrentCourse(requestCourseId)) {
+      ElMessage.error(getApiErrorMessage(error, "报告导出失败，请检查后端服务是否启动"));
+    }
   } finally {
-    exportingReport.value = false;
+    if (isCurrentCourse(requestCourseId)) exportingReport.value = false;
   }
+}
+
+function beginCourseSession() {
+  loadSequence += 1;
+  loadController?.abort();
+  loadController = null;
+  loadPromise = null;
+  sessionController.abort();
+  sessionController = new AbortController();
+  resetDiagnosisState();
+  void loadAll({ force: true, expectedCourseId: props.id });
+}
+
+function resetDiagnosisState() {
+  course.value = null;
+  profile.value = null;
+  graph.value = null;
+  wrongAttempts.value = [];
+  plan.value = null;
+  loading.value = false;
+  submittingAttempt.value = false;
+  generatingPlan.value = false;
+  exportingReport.value = false;
+  resetAttemptForm();
+  Object.assign(reviewForm, {
+    exam_date: "",
+    daily_minutes: 90,
+    goals: ""
+  });
+}
+
+function isLatestRequest(sequence, requestCourseId) {
+  return sequence === loadSequence && isCurrentCourse(requestCourseId);
+}
+
+function isCurrentCourse(requestCourseId) {
+  return String(props.id) === String(requestCourseId);
+}
+
+function sessionOptions() {
+  return { signal: sessionController.signal };
 }
 
 function resetAttemptForm() {

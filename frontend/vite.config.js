@@ -3,6 +3,14 @@ import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
   plugins: [vue()],
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.{js,jsx,ts,tsx}"],
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
+    setupFiles: ["./src/test/setup.js"],
+    clearMocks: true,
+    restoreMocks: true
+  },
   build: {
     chunkSizeWarningLimit: 900,
     rollupOptions: {
@@ -51,7 +59,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8000",
         changeOrigin: true
       }
     }

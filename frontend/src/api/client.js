@@ -76,8 +76,18 @@ export async function getCurrentUser() {
   return data;
 }
 
-export async function getCourses() {
-  const { data } = await http.get("/courses");
+export async function getHealthDetail(options = {}) {
+  const { data } = await http.get("/health/detail", options);
+  return data;
+}
+
+export async function getDashboardSummary(options = {}) {
+  const { data } = await http.get("/courses/dashboard-summary", options);
+  return data;
+}
+
+export async function getCourses(options = {}) {
+  const { data } = await http.get("/courses", options);
   return data;
 }
 
@@ -86,134 +96,140 @@ export async function createCourse(payload) {
   return data;
 }
 
-export async function getCourse(id) {
-  const { data } = await http.get(`/courses/${id}`);
+export async function getCourse(id, options = {}) {
+  const { data } = await http.get(`/courses/${id}`, options);
   return data;
 }
 
-export async function uploadDocument(courseId, file) {
+export async function uploadDocument(courseId, file, options = {}) {
   const form = new FormData();
   form.append("file", file);
   const { data } = await http.post(`/courses/${courseId}/documents`, form, {
+    ...options,
     headers: { "Content-Type": "multipart/form-data" }
   });
   return data;
 }
 
-export async function deleteDocument(courseId, documentId) {
-  const { data } = await http.delete(`/courses/${courseId}/documents/${documentId}`);
+export async function deleteDocument(courseId, documentId, options = {}) {
+  const { data } = await http.delete(`/courses/${courseId}/documents/${documentId}`, options);
   return data;
 }
 
-export async function reindexCourse(courseId) {
-  const { data } = await http.post(`/courses/${courseId}/reindex`);
+export async function reindexCourse(courseId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/reindex`, undefined, options);
   return data;
 }
 
-export async function reindexDocument(courseId, documentId) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/reindex`);
+export async function reindexDocument(courseId, documentId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/reindex`, undefined, options);
   return data;
 }
 
-export async function getProcessingJobs(courseId) {
-  const { data } = await http.get(`/courses/${courseId}/jobs`);
+export async function getProcessingJobs(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/jobs`, options);
   return data;
 }
 
-export async function retryProcessingJob(courseId, jobId) {
-  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/retry`);
+export async function retryProcessingJob(courseId, jobId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/retry`, undefined, options);
   return data;
 }
 
-export async function cancelProcessingJob(courseId, jobId) {
-  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/cancel`);
+export async function cancelProcessingJob(courseId, jobId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/jobs/${jobId}/cancel`, undefined, options);
   return data;
 }
 
-export async function ocrDocument(courseId, documentId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr`, payload);
+export async function ocrDocument(courseId, documentId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr`, payload, options);
   return data;
 }
 
-export async function visionDocument(courseId, documentId) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/vision`);
+export async function visionDocument(courseId, documentId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/vision`, undefined, options);
   return data;
 }
 
-export async function getOcrJob(courseId, documentId, jobId) {
-  const { data } = await http.get(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}`);
+export async function getOcrJob(courseId, documentId, jobId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}`, options);
   return data;
 }
 
-export async function cancelOcrJob(courseId, documentId, jobId) {
-  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}/cancel`);
+export async function cancelOcrJob(courseId, documentId, jobId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/documents/${documentId}/ocr-jobs/${jobId}/cancel`, undefined, options);
   return data;
 }
 
-export async function askCourse(courseId, question) {
+export async function askCourse(courseId, question, options = {}) {
   const { data } = await http.post(`/courses/${courseId}/ask`, {
     question,
     top_k: 5
-  });
+  }, options);
   return data;
 }
 
-export async function getSourceChunk(courseId, chunkId, params = {}) {
-  const { data } = await http.get(`/courses/${courseId}/chunks/${chunkId}`, { params });
+export async function getSourceChunk(courseId, chunkId, params = {}, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/chunks/${chunkId}`, { ...options, params });
   return data;
 }
 
-export async function generateOutline(courseId) {
-  const { data } = await http.post(`/courses/${courseId}/review-outline`);
+export async function generateOutline(courseId, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/review-outline`, undefined, options);
   return data;
 }
 
-export async function generatePractice(courseId, payload) {
+export async function generatePractice(courseId, payload, options = {}) {
   const request = typeof payload === "number" ? { count: payload } : payload;
-  const { data } = await http.post(`/courses/${courseId}/practice`, request);
+  const { data } = await http.post(`/courses/${courseId}/practice`, request, options);
   return data;
 }
 
-export async function analyzeCppCode(courseId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/cpp/analyze`, payload);
+export async function analyzeCppCode(courseId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/cpp/analyze`, payload, options);
   return data;
 }
 
-export async function getLearningProfile(courseId) {
-  const { data } = await http.get(`/courses/${courseId}/learning/profile`);
+export async function getLearningProfile(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/learning/profile`, options);
   return data;
 }
 
-export async function getKnowledgeGraph(courseId) {
-  const { data } = await http.get(`/courses/${courseId}/learning/graph`);
+export async function getKnowledgeGraph(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/learning/graph`, options);
   return data;
 }
 
-export async function getWrongAttempts(courseId) {
-  const { data } = await http.get(`/courses/${courseId}/learning/wrong-attempts`);
+export async function getWrongAttempts(courseId, options = {}) {
+  const { data } = await http.get(`/courses/${courseId}/learning/wrong-attempts`, options);
   return data;
 }
 
-export async function submitPracticeAttempt(courseId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/learning/attempts`, payload);
+export async function submitPracticeAttempt(courseId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/learning/attempts`, payload, options);
   return data;
 }
 
-export async function generateReviewPlan(courseId, payload) {
-  const { data } = await http.post(`/courses/${courseId}/learning/review-plan`, payload);
+export async function generateReviewPlan(courseId, payload, options = {}) {
+  const { data } = await http.post(`/courses/${courseId}/learning/review-plan`, payload, options);
   return data;
 }
 
-export async function updateReviewTask(courseId, taskId, status) {
-  const { data } = await http.patch(`/courses/${courseId}/learning/tasks/${taskId}`, { status });
+export async function updateReviewTask(courseId, taskId, status, options = {}) {
+  const { data } = await http.patch(`/courses/${courseId}/learning/tasks/${taskId}`, { status }, options);
   return data;
 }
 
-export async function downloadLearningReport(courseId) {
+export async function downloadLearningReport(courseId, options = {}) {
   const { data } = await http.get(`/courses/${courseId}/learning/report.pdf`, {
+    ...options,
     responseType: "blob"
   });
   return data;
+}
+
+export function isRequestCanceled(error) {
+  return axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "AbortError";
 }
 
 function shouldRedirectToLogin(error) {
