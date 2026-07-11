@@ -10,6 +10,7 @@ from app.models.entities import (
     ProcessingJob,
     QuestionAttempt,
     ReviewTask,
+    User,
     UserKnowledgeStatus,
 )
 
@@ -25,5 +26,6 @@ __all__ = [
     "ProcessingJob",
     "QuestionAttempt",
     "ReviewTask",
+    "User",
     "UserKnowledgeStatus",
 ]

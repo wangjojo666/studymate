@@ -19,7 +19,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
-    courses: Mapped[list["Course"]] = relationship(back_populates="user")
+    courses: Mapped[list[Course]] = relationship(back_populates="user")
 
 
 class Course(Base):
@@ -35,13 +35,13 @@ class Course(Base):
     last_asked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="courses")
-    documents: Mapped[list["Document"]] = relationship(
+    documents: Mapped[list[Document]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
-    chunks: Mapped[list["DocumentChunk"]] = relationship(
+    chunks: Mapped[list[DocumentChunk]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
-    knowledge_points: Mapped[list["KnowledgePoint"]] = relationship(
+    knowledge_points: Mapped[list[KnowledgePoint]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
 
@@ -66,10 +66,10 @@ class Document(Base):
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     course: Mapped[Course] = relationship(back_populates="documents")
-    chunks: Mapped[list["DocumentChunk"]] = relationship(
+    chunks: Mapped[list[DocumentChunk]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
-    processing_jobs: Mapped[list["ProcessingJob"]] = relationship(
+    processing_jobs: Mapped[list[ProcessingJob]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
 
@@ -79,7 +79,9 @@ class ProcessingJob(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
-    document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), index=True, nullable=True)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id"), index=True, nullable=True
+    )
     job_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
     stage: Mapped[str] = mapped_column(String(60), default="queued", index=True)
@@ -109,7 +111,7 @@ class DocumentChunk(Base):
 
     course: Mapped[Course] = relationship(back_populates="chunks")
     document: Mapped[Document] = relationship(back_populates="chunks")
-    knowledge_links: Mapped[list["ChunkKnowledgePoint"]] = relationship(
+    knowledge_links: Mapped[list[ChunkKnowledgePoint]] = relationship(
         back_populates="chunk", cascade="all, delete-orphan"
     )
 
@@ -123,17 +125,19 @@ class KnowledgePoint(Base):
     name: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_points.id"), nullable=True)
-    source_document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), nullable=True)
+    source_document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id"), nullable=True
+    )
     source_page: Mapped[int] = mapped_column(Integer, default=0)
     evidence: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     course: Mapped[Course] = relationship(back_populates="knowledge_points")
-    chunk_links: Mapped[list["ChunkKnowledgePoint"]] = relationship(
+    chunk_links: Mapped[list[ChunkKnowledgePoint]] = relationship(
         back_populates="knowledge_point", cascade="all, delete-orphan"
     )
-    statuses: Mapped[list["UserKnowledgeStatus"]] = relationship(
+    statuses: Mapped[list[UserKnowledgeStatus]] = relationship(
         back_populates="knowledge_point", cascade="all, delete-orphan"
     )
 
@@ -146,7 +150,9 @@ class ChunkKnowledgePoint(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
-    chunk_id: Mapped[int] = mapped_column(ForeignKey("document_chunks.id"), index=True, nullable=False)
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("document_chunks.id"), index=True, nullable=False
+    )
     knowledge_point_id: Mapped[int] = mapped_column(
         ForeignKey("knowledge_points.id"), index=True, nullable=False
     )

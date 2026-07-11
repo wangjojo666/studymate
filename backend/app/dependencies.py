@@ -8,7 +8,6 @@ from app.database import get_db
 from app.models.entities import Course, User
 from app.services.auth_service import decode_access_token
 
-
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -34,9 +33,7 @@ def get_current_course(
     db: Session = Depends(get_db),
 ) -> Course:
     course = (
-        db.query(Course)
-        .filter(Course.id == course_id, Course.user_id == current_user.id)
-        .first()
+        db.query(Course).filter(Course.id == course_id, Course.user_id == current_user.id).first()
     )
     if course is None:
         raise HTTPException(status_code=404, detail="课程不存在")
