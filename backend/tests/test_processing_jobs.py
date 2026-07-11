@@ -5,7 +5,9 @@ import json
 
 def test_upload_creates_processing_jobs(client, auth_helpers):
     course = auth_helpers.create_course("Processing Jobs")
-    uploaded = auth_helpers.upload_text_file(course["id"], "runtime polymorphism virtual function notes")
+    uploaded = auth_helpers.upload_text_file(
+        course["id"], "runtime polymorphism virtual function notes"
+    )
     document = auth_helpers.wait_document_done(course["id"], uploaded["id"])
 
     response = client.get(f"/api/courses/{course['id']}/jobs")
@@ -16,7 +18,9 @@ def test_upload_creates_processing_jobs(client, auth_helpers):
     assert any(job["job_type"] == "knowledge_sync" and job["status"] == "completed" for job in jobs)
     detail_response = client.get(f"/api/courses/{course['id']}")
     assert detail_response.status_code == 200, detail_response.text
-    latest_job = next(item for item in detail_response.json()["documents"] if item["id"] == document["id"])["latest_job"]
+    latest_job = next(
+        item for item in detail_response.json()["documents"] if item["id"] == document["id"]
+    )["latest_job"]
     assert latest_job["job_type"] in {"document_parse", "knowledge_sync"}
 
 
@@ -44,7 +48,9 @@ def test_recover_interrupted_processing_jobs_marks_active_work_failed(client, au
     course = auth_helpers.create_course("Interrupted Jobs")
     document_id = _create_document(course["id"], status="parsing", file_type="txt")
     pdf_document_id = _create_document(course["id"], status="ocr_processing", file_type="pdf")
-    processing_job_id = _create_processing_job(course["id"], "document_parse", status="running", document_id=document_id)
+    processing_job_id = _create_processing_job(
+        course["id"], "document_parse", status="running", document_id=document_id
+    )
     ocr_job_id = _create_ocr_job(course["id"], pdf_document_id, status="queued")
 
     from app.database import SessionLocal
@@ -93,7 +99,9 @@ def test_retry_document_parse_replaces_chunks_without_duplicates(client, auth_he
 def test_retry_ocr_rejects_when_ocr_job_already_active(client, auth_helpers):
     course = auth_helpers.create_course("Retry OCR Active")
     document_id = _create_document(course["id"], status="needs_ocr", file_type="pdf")
-    processing_job_id = _create_processing_job(course["id"], "ocr", status="failed", document_id=document_id)
+    processing_job_id = _create_processing_job(
+        course["id"], "ocr", status="failed", document_id=document_id
+    )
     _create_ocr_job(course["id"], document_id, status="running")
 
     response = client.post(f"/api/courses/{course['id']}/jobs/{processing_job_id}/retry")
@@ -106,7 +114,9 @@ def test_delete_document_removes_processing_and_ocr_jobs(client, auth_helpers):
     course = auth_helpers.create_course("Delete Document Jobs")
     uploaded = auth_helpers.upload_text_file(course["id"], "delete cleanup chunks and jobs")
     auth_helpers.wait_document_done(course["id"], uploaded["id"])
-    _create_processing_job(course["id"], "document_parse", status="failed", document_id=uploaded["id"])
+    _create_processing_job(
+        course["id"], "document_parse", status="failed", document_id=uploaded["id"]
+    )
     _create_ocr_job(course["id"], uploaded["id"], status="failed")
 
     response = client.delete(f"/api/courses/{course['id']}/documents/{uploaded['id']}")

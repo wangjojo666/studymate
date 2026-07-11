@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
+import os
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -22,6 +23,12 @@ from app.models.entities import (
 from app.schemas import OcrRequest
 from app.services.chunker import split_pages_into_chunks
 from app.services.document_parser import parse_document
+from app.services.file_storage import (
+    FileCleanupError,
+    finalize_staged_deletions,
+    restore_staged_deletions,
+    stage_files_for_deletion,
+)
 from app.services.learning_service import sync_course_knowledge_points
 from app.services.ocr_service import ocr_pdf_with_qwen_vl
 from app.services.processing_jobs import (
@@ -40,10 +47,13 @@ from app.services.processing_jobs import (
 )
 from app.services.reindex_service import reindex_course, reindex_document
 from app.services.upload_validation import UploadValidationError, validate_upload_file
-from app.services.vector_store import delete_chunks_from_index, delete_document_index, index_document_chunks
+from app.services.vector_store import (
+    delete_chunks_from_index,
+    delete_document_index,
+    index_document_chunks,
+)
 from app.services.vision_service import IMAGE_SUFFIXES, describe_courseware_image
 from app.utils.time import utc_now
-
 
 router = APIRouter(prefix="/courses/{course_id}/documents", tags=["documents"])
 jobs_router = APIRouter(prefix="/courses/{course_id}/jobs", tags=["processing-jobs"])
@@ -54,6 +64,10 @@ OCR_MODE_LABELS = {
 }
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+class _ProcessingCancelled(RuntimeError):
+    """Internal control flow used when a conditional job update loses to cancel."""
 
 
 @router.post("")
@@ -77,15 +91,21 @@ def upload_document(
 
     course_dir = settings.upload_dir / str(course_id)
     course_dir.mkdir(parents=True, exist_ok=True)
-    stored_filename = f"{utc_now().strftime('%Y%m%d%H%M%S')}_{_safe_filename(file.filename)}"
+    stored_filename = f"{uuid4().hex}{suffix}"
     target = course_dir / stored_filename
-    _save_upload_with_limit(file, target, max_bytes)
+    temporary_target = course_dir / f".{uuid4().hex}.upload"
+    _save_upload_with_limit(file, temporary_target, max_bytes)
     try:
-        validate_upload_file(target, suffix)
+        validate_upload_file(temporary_target, suffix)
+        temporary_target.replace(target)
     except UploadValidationError as exc:
-        target.unlink(missing_ok=True)
+        temporary_target.unlink(missing_ok=True)
         _remove_empty_parent(course_dir)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        temporary_target.unlink(missing_ok=True)
+        _remove_empty_parent(course_dir)
+        raise HTTPException(status_code=500, detail="上传文件落盘失败，请重试") from exc
 
     document = Document(
         course_id=course_id,
@@ -98,20 +118,28 @@ def upload_document(
         processing_progress=0,
         error_message="已上传，等待后台解析。",
     )
-    db.add(document)
-    db.commit()
-    db.refresh(document)
-    job = create_processing_job(
-        db,
-        course_id=course_id,
-        document_id=document.id,
-        job_type="document_parse",
-        error_message="资料已上传，等待后台解析。",
-    )
-    db.commit()
-    db.refresh(job)
+    try:
+        db.add(document)
+        db.flush()
+        job = create_processing_job(
+            db,
+            course_id=course_id,
+            document_id=document.id,
+            job_type="document_parse",
+            error_message="资料已上传，等待后台解析。",
+        )
+        db.commit()
+        db.refresh(document)
+        db.refresh(job)
+    except Exception:
+        db.rollback()
+        target.unlink(missing_ok=True)
+        _remove_empty_parent(course_dir)
+        raise
 
-    background_tasks.add_task(_process_uploaded_document, document.id, learning_user_id(current_user), job.id)
+    background_tasks.add_task(
+        _process_uploaded_document, document.id, learning_user_id(current_user), job.id
+    )
     payload = _document_payload(document)
     payload["latest_job"] = processing_job_payload(job, document)
     return payload
@@ -157,44 +185,107 @@ def delete_document(
         raise HTTPException(status_code=404, detail="资料不存在")
 
     file_path = Path(document.file_path)
+    _cancel_document_jobs_for_deletion(db, document)
+    document.status = "deleting"
+    document.processing_stage = "deleting"
+    document.processing_progress = 100
+    document.error_message = "资料正在删除，相关后台任务已取消。"
+    db.commit()
+
+    try:
+        staged_files = stage_files_for_deletion([file_path], allowed_root=settings.upload_dir)
+    except FileCleanupError as exc:
+        document = db.get(Document, document_id)
+        if document is not None:
+            document.status = "indexed" if document.chunk_count else "cancelled"
+            document.processing_stage = "cleanup_failed"
+            document.error_message = str(exc)
+            db.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     chunk_ids = [
         row[0]
         for row in db.query(DocumentChunk.id).filter(DocumentChunk.document_id == document_id).all()
     ]
-    if chunk_ids:
-        delete_chunks_from_index(chunk_ids)
-        db.query(ChunkKnowledgePoint).filter(ChunkKnowledgePoint.chunk_id.in_(chunk_ids)).delete(
+    try:
+        if chunk_ids:
+            db.query(ChunkKnowledgePoint).filter(
+                ChunkKnowledgePoint.chunk_id.in_(chunk_ids)
+            ).delete(synchronize_session=False)
+        db.query(ProcessingJob).filter(ProcessingJob.document_id == document_id).delete(
             synchronize_session=False
         )
-    else:
-        delete_document_index(document_id)
-    db.query(ProcessingJob).filter(ProcessingJob.document_id == document_id).delete(synchronize_session=False)
-    db.query(OcrJob).filter(OcrJob.document_id == document_id).delete(synchronize_session=False)
-    db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete(
-        synchronize_session=False
-    )
-    (
-        db.query(KnowledgePoint)
-        .filter(KnowledgePoint.source_document_id == document_id)
-        .update(
-            {
-                KnowledgePoint.source_document_id: None,
-                KnowledgePoint.source_page: 0,
-                KnowledgePoint.evidence: "来源资料已删除，请重新同步或上传资料。",
-            },
-            synchronize_session=False,
+        db.query(OcrJob).filter(OcrJob.document_id == document_id).delete(synchronize_session=False)
+        db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete(
+            synchronize_session=False
         )
-    )
-    db.delete(document)
-    db.commit()
+        (
+            db.query(KnowledgePoint)
+            .filter(KnowledgePoint.source_document_id == document_id)
+            .update(
+                {
+                    KnowledgePoint.source_document_id: None,
+                    KnowledgePoint.source_page: 0,
+                    KnowledgePoint.evidence: "来源资料已删除，请重新同步或上传资料。",
+                },
+                synchronize_session=False,
+            )
+        )
+        db.delete(document)
+        db.commit()
+    except Exception:
+        db.rollback()
+        restore_staged_deletions(staged_files)
+        raise
 
-    if file_path.exists():
-        try:
-            file_path.unlink()
-        except OSError:
-            return {"ok": True, "warning": "资料记录已删除，但本地文件删除失败，请手动检查 storage/uploads。"}
+    vector_deleted = (
+        delete_chunks_from_index(chunk_ids) if chunk_ids else delete_document_index(document_id)
+    )
+    cleanup_failures = finalize_staged_deletions(staged_files)
     _remove_empty_parent(file_path.parent)
-    return {"ok": True}
+    warnings: list[str] = []
+    if not vector_deleted:
+        warnings.append(
+            "向量索引清理失败；SQL 记录已删除，检索会过滤陈旧结果，可稍后运行重新索引对账。"
+        )
+    if cleanup_failures:
+        warnings.append("资料记录已删除，但临时清理文件删除失败，请检查 storage/uploads。")
+    payload: dict = {"ok": True}
+    if warnings:
+        payload["warning"] = " ".join(warnings)
+    return payload
+
+
+def _cancel_document_jobs_for_deletion(db: Session, document: Document) -> None:
+    message = "资料删除前已取消相关后台任务。"
+    processing_jobs = (
+        db.query(ProcessingJob)
+        .filter(
+            ProcessingJob.document_id == document.id,
+            ProcessingJob.status.in_(("queued", "running")),
+        )
+        .all()
+    )
+    for job in processing_jobs:
+        cancel_processing_job(db, job, message=message)
+
+    ocr_jobs = (
+        db.query(OcrJob)
+        .filter(OcrJob.document_id == document.id, OcrJob.status.in_(("queued", "running")))
+        .all()
+    )
+    for job in ocr_jobs:
+        _conditional_ocr_job_update(
+            db,
+            job,
+            allowed_statuses={"queued", "running"},
+            values={
+                OcrJob.status: "cancelled",
+                OcrJob.finished_at: utc_now(),
+                OcrJob.error_message: message,
+                OcrJob.updated_at: utc_now(),
+            },
+        )
 
 
 @router.post("/{document_id}/reindex")
@@ -219,7 +310,9 @@ def reindex_single_document(
     )
     db.commit()
     try:
-        start_processing_job(db, job, stage="reindexing", progress=10, message="正在重新索引资料片段。")
+        start_processing_job(
+            db, job, stage="reindexing", progress=10, message="正在重新索引资料片段。"
+        )
         result = reindex_document(db, document)
         complete_processing_job(db, job, stage="completed", message="资料重新索引完成。")
         db.commit()
@@ -327,9 +420,7 @@ def ocr_document(
         f"[mode:{payload.mode}] {mode_label}任务已加入后台队列：从第 {payload.start_page} 页开始，"
         f"最多处理 {payload.max_pages} 页。"
     )
-    document.error_message = (
-        f"{mode_label}任务已加入后台队列：从第 {payload.start_page} 页开始，最多处理 {payload.max_pages} 页。"
-    )
+    document.error_message = f"{mode_label}任务已加入后台队列：从第 {payload.start_page} 页开始，最多处理 {payload.max_pages} 页。"
     db.commit()
     set_job_metadata(
         db,
@@ -390,16 +481,28 @@ def cancel_ocr_job(
     if job.status in {"completed", "failed", "cancelled"}:
         return _ocr_job_payload(job, document)
 
-    job.status = "cancelled"
-    job.finished_at = utc_now()
-    job.error_message = f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {job.processed_pages} 页识别结果。"
+    cancel_message = (
+        f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {job.processed_pages} 页识别结果。"
+    )
+    if not _conditional_ocr_job_update(
+        db,
+        job,
+        allowed_statuses={"queued", "running"},
+        values={
+            OcrJob.status: "cancelled",
+            OcrJob.finished_at: utc_now(),
+            OcrJob.error_message: cancel_message,
+            OcrJob.updated_at: utc_now(),
+        },
+    ):
+        return _ocr_job_payload(job, document)
     document.status = "indexed" if document.chunk_count else "needs_ocr"
     document.processing_stage = document.status
     document.processing_progress = 100
-    document.error_message = job.error_message
+    document.error_message = cancel_message
     processing_job = _find_processing_job_for_ocr(db, job.id)
     if processing_job:
-        cancel_processing_job(db, processing_job, message=job.error_message)
+        cancel_processing_job(db, processing_job, message=cancel_message)
     db.commit()
     db.refresh(job)
     db.refresh(document)
@@ -414,7 +517,10 @@ def list_processing_jobs(
 ) -> list[dict]:
     if _get_owned_course(db, course_id, current_user.id) is None:
         raise HTTPException(status_code=404, detail="课程不存在")
-    documents = {document.id: document for document in db.query(Document).filter(Document.course_id == course_id).all()}
+    documents = {
+        document.id: document
+        for document in db.query(Document).filter(Document.course_id == course_id).all()
+    }
     jobs = (
         db.query(ProcessingJob)
         .filter(ProcessingJob.course_id == course_id)
@@ -447,7 +553,9 @@ def retry_processing_job(
     if job.job_type in {"document_parse", "ocr"} and document is None:
         raise HTTPException(status_code=400, detail="任务缺少关联资料，无法重试")
     if _has_active_processing_job(db, job, document):
-        raise HTTPException(status_code=409, detail="同一资料或课程已有同类任务正在运行，请等待当前任务结束后再重试")
+        raise HTTPException(
+            status_code=409, detail="同一资料或课程已有同类任务正在运行，请等待当前任务结束后再重试"
+        )
     if job.job_type == "ocr" and document is not None:
         running_ocr_job = (
             db.query(OcrJob)
@@ -458,14 +566,19 @@ def retry_processing_job(
             .first()
         )
         if running_ocr_job:
-            raise HTTPException(status_code=409, detail="该资料已有 OCR 任务正在运行，请等待当前任务结束后再重试")
+            raise HTTPException(
+                status_code=409, detail="该资料已有 OCR 任务正在运行，请等待当前任务结束后再重试"
+            )
 
-    reset_failed_processing_job(db, job)
+    if not reset_failed_processing_job(db, job):
+        raise HTTPException(status_code=409, detail="任务状态已被其他请求更新，请刷新后重试")
     db.commit()
     db.refresh(job)
 
     if job.job_type == "document_parse":
-        background_tasks.add_task(_process_uploaded_document, job.document_id, learning_user_id(current_user), job.id)
+        background_tasks.add_task(
+            _process_uploaded_document, job.document_id, learning_user_id(current_user), job.id
+        )
         return processing_job_payload(job, document)
     if job.job_type == "ocr":
         if document is None:
@@ -508,19 +621,31 @@ def cancel_processing_job_endpoint(
         ocr_job_id = metadata.get("ocr_job_id")
         legacy_job = db.get(OcrJob, int(ocr_job_id)) if ocr_job_id else None
         if legacy_job and legacy_job.status not in {"completed", "failed", "cancelled"}:
-            legacy_job.status = "cancelled"
-            legacy_job.finished_at = utc_now()
-            legacy_job.error_message = (
-                f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {legacy_job.processed_pages} 页识别结果。"
+            legacy_message = f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {legacy_job.processed_pages} 页识别结果。"
+            cancelled = _conditional_ocr_job_update(
+                db,
+                legacy_job,
+                allowed_statuses={"queued", "running"},
+                values={
+                    OcrJob.status: "cancelled",
+                    OcrJob.finished_at: utc_now(),
+                    OcrJob.error_message: legacy_message,
+                    OcrJob.updated_at: utc_now(),
+                },
             )
-            message = legacy_job.error_message
-            if document:
+            message = legacy_message if cancelled else message
+            if cancelled and document:
                 document.status = "indexed" if document.chunk_count else "needs_ocr"
                 document.processing_stage = document.status
                 document.processing_progress = 100
                 document.error_message = message
 
     cancel_processing_job(db, job, message=message)
+    if job.status == "cancelled" and document and job.job_type != "ocr":
+        document.status = "indexed" if document.chunk_count else "cancelled"
+        document.processing_stage = "cancelled"
+        document.processing_progress = 100
+        document.error_message = message
     db.commit()
     db.refresh(job)
     return processing_job_payload(job, document)
@@ -587,8 +712,12 @@ def _retry_knowledge_sync_job(
     document: Document | None,
 ) -> dict:
     try:
-        start_processing_job(db, job, stage="syncing_knowledge_points", progress=10, message="正在同步知识点。")
-        sync_course_knowledge_points(db, job.course_id, job.document_id, learning_user_id(current_user))
+        start_processing_job(
+            db, job, stage="syncing_knowledge_points", progress=10, message="正在同步知识点。"
+        )
+        sync_course_knowledge_points(
+            db, job.course_id, job.document_id, learning_user_id(current_user)
+        )
         complete_processing_job(db, job, stage="completed", message="知识点同步完成。")
         db.commit()
         db.refresh(job)
@@ -605,7 +734,11 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
         job = db.get(OcrJob, job_id)
         if job is None:
             return
-        processing_job = db.get(ProcessingJob, processing_job_id) if processing_job_id else _find_processing_job_for_ocr(db, job_id)
+        processing_job = (
+            db.get(ProcessingJob, processing_job_id)
+            if processing_job_id
+            else _find_processing_job_for_ocr(db, job_id)
+        )
         document = db.get(Document, job.document_id)
         if document is None:
             job.status = "failed"
@@ -615,11 +748,41 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
             db.commit()
             return
 
-        job.status = "running"
-        job.current_page = job.start_page
-        job.total_pages = document.page_count
+        if not _conditional_ocr_job_update(
+            db,
+            job,
+            allowed_statuses={"queued", "running"},
+            values={
+                OcrJob.status: "running",
+                OcrJob.current_page: job.start_page,
+                OcrJob.total_pages: document.page_count,
+                OcrJob.updated_at: utc_now(),
+            },
+        ):
+            db.rollback()
+            return
         mode = _ocr_mode_from_message(job.error_message)
         mode_label = OCR_MODE_LABELS.get(mode, "快速索引")
+        if processing_job is not None and not start_processing_job(
+            db,
+            processing_job,
+            stage="ocr_processing",
+            progress=5,
+            message=f"正在后台{mode_label}",
+        ):
+            _conditional_ocr_job_update(
+                db,
+                job,
+                allowed_statuses={"queued", "running"},
+                values={
+                    OcrJob.status: "cancelled",
+                    OcrJob.finished_at: utc_now(),
+                    OcrJob.error_message: CANCEL_MARKED_MESSAGE,
+                    OcrJob.updated_at: utc_now(),
+                },
+            )
+            db.commit()
+            return
         document.status = "ocr_processing"
         document.processing_stage = "ocr_processing"
         document.processing_progress = 5
@@ -627,7 +790,7 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
             f"正在后台{mode_label}：从第 {job.start_page} 页开始，最多处理 {job.max_pages} 页。"
         )
         job.error_message = f"[mode:{mode}] {document.error_message}"
-        start_processing_job(
+        update_processing_job(
             db,
             processing_job,
             stage="ocr_processing",
@@ -640,20 +803,33 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
             db.refresh(job)
             if processing_job is not None:
                 db.refresh(processing_job)
-            return job.status == "cancelled" or (processing_job is not None and processing_job.status == "cancelled")
+            return job.status == "cancelled" or (
+                processing_job is not None and processing_job.status == "cancelled"
+            )
 
         def mark_page_start(page_number: int) -> None:
-            db.refresh(job)
-            if job.status == "cancelled":
-                return
-            job.current_page = page_number
-            job.error_message = (
+            message = (
                 f"[mode:{mode}] 正在{mode_label}第 {page_number} 页，"
                 f"已完成 {job.processed_pages}/{job.max_pages} 页。"
             )
+            if not _conditional_ocr_job_update(
+                db,
+                job,
+                allowed_statuses={"queued", "running"},
+                values={
+                    OcrJob.status: "running",
+                    OcrJob.current_page: page_number,
+                    OcrJob.error_message: message,
+                    OcrJob.updated_at: utc_now(),
+                },
+            ):
+                db.rollback()
+                raise _ProcessingCancelled
             document.status = "ocr_processing"
             document.processing_stage = "ocr_processing"
-            document.processing_progress = min(95, round((job.processed_pages / max(1, job.max_pages)) * 100))
+            document.processing_progress = min(
+                95, round((job.processed_pages / max(1, job.max_pages)) * 100)
+            )
             document.error_message = job.error_message.replace(f"[mode:{mode}] ", "", 1)
             update_processing_job(
                 db,
@@ -665,10 +841,35 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
             db.commit()
 
         def mark_page_done(page_number: int, text: str) -> None:
-            db.refresh(job)
-            if job.status == "cancelled":
-                return
             page_chunks = split_pages_into_chunks([(page_number, text)])
+            next_processed_pages = job.processed_pages + 1
+            next_progress = min(95, round((next_processed_pages / max(1, job.max_pages)) * 100))
+            next_message = (
+                f"[mode:{mode}] 已处理到第 {page_number} 页，"
+                f"共完成 {next_processed_pages}/{job.max_pages} 页。"
+            )
+            if not _conditional_ocr_job_update(
+                db,
+                job,
+                allowed_statuses={"queued", "running"},
+                values={
+                    OcrJob.status: "running",
+                    OcrJob.current_page: page_number,
+                    OcrJob.processed_pages: OcrJob.processed_pages + 1,
+                    OcrJob.chunk_count: OcrJob.chunk_count + len(page_chunks),
+                    OcrJob.error_message: next_message,
+                    OcrJob.updated_at: utc_now(),
+                },
+            ):
+                db.rollback()
+                raise _ProcessingCancelled
+            _claim_processing_job(
+                db,
+                processing_job,
+                "ocr_processing",
+                next_progress,
+                "正在写入 OCR 结果",
+            )
             index_document_chunks(
                 db,
                 document,
@@ -676,16 +877,11 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
                 replace_document=False,
                 replace_page_numbers=[page_number],
             )
-            job.current_page = page_number
-            job.processed_pages += 1
-            job.chunk_count += len(page_chunks)
-            job.error_message = (
-                f"[mode:{mode}] 已处理到第 {page_number} 页，"
-                f"共完成 {job.processed_pages}/{job.max_pages} 页。"
-            )
             document.status = "ocr_processing"
             document.processing_stage = "ocr_processing"
-            document.processing_progress = min(95, round((job.processed_pages / max(1, job.max_pages)) * 100))
+            document.processing_progress = min(
+                95, round((job.processed_pages / max(1, job.max_pages)) * 100)
+            )
             document.error_message = job.error_message.replace(f"[mode:{mode}] ", "", 1)
             update_processing_job(
                 db,
@@ -711,14 +907,29 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
                 document.status = "indexed" if document.chunk_count else "needs_ocr"
                 document.processing_stage = document.status
                 document.processing_progress = 100
-                document.error_message = (
-                    f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {job.processed_pages} 页识别结果。"
-                )
+                document.error_message = f"OCR 已标记取消；后台会在下一次检查后停止，已保留 {job.processed_pages} 页识别结果。"
                 job.error_message = document.error_message
-                cancel_processing_job(db, processing_job, message=document.error_message) if processing_job else None
+                cancel_processing_job(
+                    db, processing_job, message=document.error_message
+                ) if processing_job else None
                 db.commit()
                 return
             chunks = split_pages_into_chunks(result.pages)
+            if not _conditional_ocr_job_update(
+                db,
+                job,
+                allowed_statuses={"queued", "running"},
+                values={OcrJob.status: "running", OcrJob.updated_at: utc_now()},
+            ):
+                db.rollback()
+                return
+            _claim_processing_job(
+                db,
+                processing_job,
+                "ocr_processing",
+                96,
+                "正在完成 OCR 索引",
+            )
             document.page_count = result.total_pages
             index_document_chunks(
                 db,
@@ -734,11 +945,6 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
                 document.id,
                 str(course.user_id) if course else None,
             )
-            job.status = "completed"
-            job.total_pages = result.total_pages
-            job.processed_pages = result.processed_pages
-            job.chunk_count = len(chunks)
-            job.finished_at = utc_now()
             if document.chunk_count:
                 document.status = "indexed"
                 document.processing_stage = "indexed"
@@ -752,23 +958,69 @@ def _run_ocr_job(job_id: int, processing_job_id: int | None = None) -> None:
                 document.status = "needs_ocr"
                 document.processing_stage = "needs_ocr"
                 document.processing_progress = 100
-                document.error_message = "OCR 没有识别到有效文字。请减少页数或检查模型是否支持图片输入。"
-            job.error_message = document.error_message
-            complete_processing_job(db, processing_job, stage=document.status, message=document.error_message)
+                document.error_message = (
+                    "OCR 没有识别到有效文字。请减少页数或检查模型是否支持图片输入。"
+                )
+            if not _conditional_ocr_job_update(
+                db,
+                job,
+                allowed_statuses={"queued", "running"},
+                values={
+                    OcrJob.status: "completed",
+                    OcrJob.total_pages: result.total_pages,
+                    OcrJob.processed_pages: result.processed_pages,
+                    OcrJob.chunk_count: len(chunks),
+                    OcrJob.finished_at: utc_now(),
+                    OcrJob.error_message: document.error_message,
+                    OcrJob.updated_at: utc_now(),
+                },
+            ):
+                db.rollback()
+                return
+            if processing_job is not None and not complete_processing_job(
+                db,
+                processing_job,
+                stage=document.status,
+                message=document.error_message,
+            ):
+                db.rollback()
+                return
             db.commit()
+        except _ProcessingCancelled:
+            db.rollback()
+            return
         except Exception as exc:  # noqa: BLE001 - surface OCR failure to the UI.
-            job.status = "failed"
-            job.error_message = str(exc)
-            job.finished_at = utc_now()
+            if not _conditional_ocr_job_update(
+                db,
+                job,
+                allowed_statuses={"queued", "running"},
+                values={
+                    OcrJob.status: "failed",
+                    OcrJob.error_message: str(exc),
+                    OcrJob.finished_at: utc_now(),
+                    OcrJob.updated_at: utc_now(),
+                },
+            ):
+                db.rollback()
+                return
             document.status = "indexed" if document.chunk_count else "needs_ocr"
             document.processing_stage = document.status
             document.processing_progress = 100
             document.error_message = str(exc)
-            fail_processing_job(db, processing_job, stage="failed", message=_friendly_error(exc))
+            if processing_job is not None and not fail_processing_job(
+                db,
+                processing_job,
+                stage="failed",
+                message=_friendly_error(exc),
+            ):
+                db.rollback()
+                return
             db.commit()
 
 
-def _process_uploaded_document(document_id: int, user_id: str | None, processing_job_id: int | None = None) -> None:
+def _process_uploaded_document(
+    document_id: int, user_id: str | None, processing_job_id: int | None = None
+) -> None:
     with SessionLocal() as db:
         document = db.get(Document, document_id)
         if document is None:
@@ -788,42 +1040,83 @@ def _process_uploaded_document(document_id: int, user_id: str | None, processing
         try:
             if suffix in IMAGE_SUFFIXES:
                 _set_processing(db, document, "parsing", 20, "正在识别图片课件内容", processing_job)
+                _claim_processing_job(db, processing_job, "parsing", 20, "正在识别图片课件内容")
                 _index_image_document(db, course, document, user_id)
                 _finish_document_processing(document)
-                complete_processing_job(db, processing_job, stage=document.status, message=document.error_message)
+                if not complete_processing_job(
+                    db,
+                    processing_job,
+                    stage=document.status,
+                    message=document.error_message,
+                ):
+                    db.rollback()
+                    return
                 db.commit()
                 return
 
             _set_processing(db, document, "parsing", 20, "正在解析文本", processing_job)
             pages = parse_document(Path(document.file_path))
             document.page_count = len(pages)
-            db.commit()
 
             _set_processing(db, document, "chunking", 45, "正在切分知识片段", processing_job)
             chunks = split_pages_into_chunks(pages)
             if not chunks:
                 _finalize_parse_status(document, suffix, has_chunks=False, has_pages=bool(pages))
                 _finish_document_processing(document)
-                complete_processing_job(db, processing_job, stage=document.status, message=document.error_message)
+                if not complete_processing_job(
+                    db,
+                    processing_job,
+                    stage=document.status,
+                    message=document.error_message,
+                ):
+                    db.rollback()
+                    return
                 db.commit()
                 return
 
             _set_processing(db, document, "indexing", 70, "正在写入向量库", processing_job)
+            _claim_processing_job(db, processing_job, "indexing", 70, "正在写入向量库")
             index_document_chunks(db, document, chunks)
             db.commit()
 
-            _set_processing(db, document, "syncing_knowledge_points", 90, "正在同步知识点", processing_job)
+            _set_processing(
+                db, document, "syncing_knowledge_points", 90, "正在同步知识点", processing_job
+            )
+            _claim_processing_job(
+                db,
+                processing_job,
+                "syncing_knowledge_points",
+                90,
+                "正在同步知识点",
+            )
             _run_knowledge_sync_job(db, document.course_id, document.id, user_id)
             _finalize_parse_status(document, suffix, has_chunks=True, has_pages=bool(pages))
             _finish_document_processing(document)
-            complete_processing_job(db, processing_job, stage=document.status, message=document.error_message)
+            if not complete_processing_job(
+                db,
+                processing_job,
+                stage=document.status,
+                message=document.error_message,
+            ):
+                db.rollback()
+                return
             db.commit()
+        except _ProcessingCancelled:
+            db.rollback()
+            return
         except Exception as exc:  # noqa: BLE001 - background task should persist a user-readable error.
             document.status = "needs_vision" if suffix in IMAGE_SUFFIXES else "failed"
             document.processing_stage = document.status
             document.processing_progress = 100
             document.error_message = _friendly_error(exc)
-            fail_processing_job(db, processing_job, stage="failed", message=document.error_message)
+            if processing_job is not None and not fail_processing_job(
+                db,
+                processing_job,
+                stage="failed",
+                message=document.error_message,
+            ):
+                db.rollback()
+                return
             db.commit()
 
 
@@ -835,13 +1128,61 @@ def _set_processing(
     message: str,
     processing_job: ProcessingJob | None = None,
 ) -> None:
+    if processing_job is not None and not update_processing_job(
+        db,
+        processing_job,
+        stage=stage,
+        progress=progress,
+        message=message,
+    ):
+        db.rollback()
+        raise _ProcessingCancelled
     document.status = stage
     document.processing_stage = stage
     document.processing_progress = progress
     document.error_message = message
-    update_processing_job(db, processing_job, stage=stage, progress=progress, message=message)
     db.commit()
     db.refresh(document)
+
+
+def _claim_processing_job(
+    db: Session,
+    processing_job: ProcessingJob | None,
+    stage: str,
+    progress: int,
+    message: str,
+) -> None:
+    """Acquire the persisted job transition before writing stage results."""
+    if processing_job is not None and not update_processing_job(
+        db,
+        processing_job,
+        stage=stage,
+        progress=progress,
+        message=message,
+    ):
+        db.rollback()
+        raise _ProcessingCancelled
+
+
+def _conditional_ocr_job_update(
+    db: Session,
+    job: OcrJob,
+    *,
+    allowed_statuses: set[str],
+    values: dict,
+) -> bool:
+    """Apply OCR state changes with a database-side cancellation guard."""
+    with db.no_autoflush:
+        updated = (
+            db.query(OcrJob)
+            .filter(OcrJob.id == job.id, OcrJob.status.in_(allowed_statuses))
+            .update(values, synchronize_session=False)
+        )
+    if not updated:
+        return False
+    db.flush()
+    db.refresh(job)
+    return True
 
 
 def _finish_document_processing(document: Document) -> None:
@@ -858,7 +1199,9 @@ def _friendly_error(exc: Exception) -> str:
     return text[:500]
 
 
-def _finalize_parse_status(document: Document, suffix: str, has_chunks: bool, has_pages: bool) -> None:
+def _finalize_parse_status(
+    document: Document, suffix: str, has_chunks: bool, has_pages: bool
+) -> None:
     if has_chunks:
         document.status = "indexed"
         document.error_message = ""
@@ -873,7 +1216,9 @@ def _finalize_parse_status(document: Document, suffix: str, has_chunks: bool, ha
         document.error_message = "未从文件中解析到可检索文本。"
 
 
-def _index_image_document(db: Session, course: Course, document: Document, user_id: str | None) -> None:
+def _index_image_document(
+    db: Session, course: Course, document: Document, user_id: str | None
+) -> None:
     document.status = "vision_processing"
     document.processing_stage = "vision_processing"
     document.processing_progress = 35
@@ -909,7 +1254,9 @@ def _run_knowledge_sync_job(
         job_type="knowledge_sync",
         error_message="知识点同步任务已创建。",
     )
-    start_processing_job(db, job, stage="syncing_knowledge_points", progress=10, message="正在同步知识点。")
+    start_processing_job(
+        db, job, stage="syncing_knowledge_points", progress=10, message="正在同步知识点。"
+    )
     try:
         sync_course_knowledge_points(db, course_id, document_id, user_id)
         complete_processing_job(db, job, stage="completed", message="知识点同步完成。")
@@ -922,11 +1269,7 @@ def _run_knowledge_sync_job(
 
 
 def _get_owned_course(db: Session, course_id: int, user_id: int) -> Course | None:
-    return (
-        db.query(Course)
-        .filter(Course.id == course_id, Course.user_id == user_id)
-        .first()
-    )
+    return db.query(Course).filter(Course.id == course_id, Course.user_id == user_id).first()
 
 
 def _has_active_processing_job(db: Session, job: ProcessingJob, document: Document | None) -> bool:
@@ -943,11 +1286,6 @@ def _has_active_processing_job(db: Session, job: ProcessingJob, document: Docume
     else:
         query = query.filter(ProcessingJob.document_id == job.document_id)
     return query.first() is not None
-
-
-def _safe_filename(filename: str) -> str:
-    name = re.sub("[^\\w.\\-\u4e00-\u9fff]+", "_", filename, flags=re.UNICODE)
-    return name[:160] or "upload"
 
 
 def _max_upload_bytes(suffix: str) -> int:
@@ -971,6 +1309,8 @@ def _save_upload_with_limit(file: UploadFile, target: Path, max_bytes: int) -> N
                         detail=f"文件过大。当前类型最大允许 {_format_bytes(max_bytes)}。",
                     )
                 out_file.write(chunk)
+            out_file.flush()
+            os.fsync(out_file.fileno())
     except Exception:
         target.unlink(missing_ok=True)
         raise

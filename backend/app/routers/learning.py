@@ -18,7 +18,6 @@ from app.services.learning_service import (
 )
 from app.services.report_service import generate_learning_report_pdf
 
-
 router = APIRouter(prefix="/courses/{course_id}/learning", tags=["learning"])
 
 
@@ -118,7 +117,9 @@ def update_task(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     _ensure_course(db, course_id, current_user.id)
-    task = update_review_task_status(db, course_id, task_id, payload.status, learning_user_id(current_user))
+    task = update_review_task_status(
+        db, course_id, task_id, payload.status, learning_user_id(current_user)
+    )
     if task is None:
         raise HTTPException(status_code=404, detail="复习任务不存在")
     return task

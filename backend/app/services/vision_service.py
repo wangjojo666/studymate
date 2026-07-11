@@ -8,7 +8,6 @@ from pathlib import Path
 
 from app.config import settings
 
-
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -72,12 +71,7 @@ def describe_courseware_image(path: Path, course_name: str) -> str:
 
 
 def _normalize_image_description(content: str, path: Path, course_name: str) -> str:
-    return (
-        f"图片课件来源：{path.name}\n"
-        f"课程：{course_name}\n"
-        "识别结果：\n"
-        f"{content.strip()}"
-    )
+    return f"图片课件来源：{path.name}\n课程：{course_name}\n识别结果：\n{content.strip()}"
 
 
 def _mock_image_description(path: Path, course_name: str) -> str:

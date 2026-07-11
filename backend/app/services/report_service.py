@@ -21,7 +21,7 @@ def generate_learning_report_pdf(db: Session, course_id: int, user_id: str | Non
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.cidfonts import UnicodeCIDFont
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-    except ImportError as exc:
+    except ImportError:
         return _generate_simple_report_pdf(db, course_id, user_id)
 
     course = db.get(Course, course_id)
@@ -42,7 +42,11 @@ def generate_learning_report_pdf(db: Session, course_id: int, user_id: str | Non
     review_query = db.query(ReviewTask).filter(ReviewTask.course_id == course_id)
     if user_id:
         review_query = review_query.filter(ReviewTask.user_id == str(user_id))
-    review_tasks = review_query.order_by(ReviewTask.deadline.asc().nullslast(), ReviewTask.created_at.desc()).limit(12).all()
+    review_tasks = (
+        review_query.order_by(ReviewTask.deadline.asc().nullslast(), ReviewTask.created_at.desc())
+        .limit(12)
+        .all()
+    )
     advice = _ai_advice(course.name, profile, wrong_attempts)
 
     buffer = BytesIO()
@@ -139,13 +143,21 @@ def _user_label(user: User | None, user_id: str | None) -> str:
     return f"{name}（{user.email}）"
 
 
-def _overview_table(db: Session, course_id: int, profile: dict, body_style, Table, TableStyle, colors):
+def _overview_table(
+    db: Session, course_id: int, profile: dict, body_style, Table, TableStyle, colors
+):
     summary = profile.get("summary", {})
     question_count = db.query(ChatMessage).filter(ChatMessage.course_id == course_id).count()
-    practice_count = db.query(QuestionAttempt).filter(QuestionAttempt.course_id == course_id).count()
+    practice_count = (
+        db.query(QuestionAttempt).filter(QuestionAttempt.course_id == course_id).count()
+    )
     rows = [
         ["指标", "数值", "说明"],
-        ["上传资料数", str(summary.get("document_count", 0)), "课程已保存的 PDF/PPTX/DOCX/TXT/图片资料"],
+        [
+            "上传资料数",
+            str(summary.get("document_count", 0)),
+            "课程已保存的 PDF/PPTX/DOCX/TXT/图片资料",
+        ],
         ["知识片段数", str(summary.get("chunk_count", 0)), "已入库并可参与检索的资料片段"],
         ["提问次数", str(question_count), "课程问答记录数"],
         ["练习次数", str(practice_count), "写入错题本或学习画像的练习记录"],
@@ -181,7 +193,8 @@ def _weak_points_table(profile: dict, body_style, Table, TableStyle, colors):
                 f"{point.get('mastery_score', 0)}%",
                 str(point.get("wrong_count", 0)),
                 point.get("main_error_label") or "未分类",
-                point.get("explanation") or f"回看 P{point.get('source_page') or '-'}，做 3 道同类题。",
+                point.get("explanation")
+                or f"回看 P{point.get('source_page') or '-'}，做 3 道同类题。",
             ]
         )
     return _table(rows, body_style, Table, TableStyle, colors, widths=[14, 34, 20, 16, 28, 62])
@@ -231,7 +244,9 @@ def _recent_wrong_table(wrong_attempts: list[dict], body_style, Table, TableStyl
     return _table(rows, body_style, Table, TableStyle, colors, widths=[48, 32, 32, 30, 32])
 
 
-def _review_plan_table(review_tasks: list[ReviewTask], profile: dict, body_style, Table, TableStyle, colors):
+def _review_plan_table(
+    review_tasks: list[ReviewTask], profile: dict, body_style, Table, TableStyle, colors
+):
     rows = [["日期", "任务标题", "任务类型", "状态"]]
     tasks = review_tasks[:8]
     if not tasks and profile.get("recommendations"):
@@ -246,7 +261,14 @@ def _review_plan_table(review_tasks: list[ReviewTask], profile: dict, body_style
                 ]
             )
     elif not tasks:
-        rows.append([datetime.now().date().isoformat(), "暂无数据：先上传资料并记录练习", "初始化", "待生成"])
+        rows.append(
+            [
+                datetime.now().date().isoformat(),
+                "暂无数据：先上传资料并记录练习",
+                "初始化",
+                "待生成",
+            ]
+        )
     else:
         for task in tasks:
             rows.append(
@@ -429,7 +451,11 @@ def _build_minimal_pdf(lines: list[str]) -> bytes:
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Length "
+        + str(len(stream)).encode("ascii")
+        + b" >>\nstream\n"
+        + stream
+        + b"\nendstream",
     ]
 
     pdf = bytearray(b"%PDF-1.4\n")

@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.entities import Document, OcrJob, ProcessingJob
 from app.utils.time import utc_now
 
-
-TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 ACTIVE_STATUSES = {"queued", "running"}
 ACTIVE_DOCUMENT_STATUSES = {
     "queued",
@@ -64,18 +63,24 @@ def start_processing_job(
     stage: str = "running",
     progress: int = 1,
     message: str = "",
-) -> None:
+) -> bool:
     if job is None:
-        return
-    if job.status == "cancelled":
-        return
-    job.status = "running"
-    job.stage = stage
-    job.progress = _clamp_progress(progress)
-    job.error_message = message
-    job.started_at = job.started_at or utc_now()
-    job.finished_at = None
-    db.flush()
+        return False
+    now = utc_now()
+    return _conditional_job_update(
+        db,
+        job,
+        allowed_statuses=ACTIVE_STATUSES,
+        values={
+            ProcessingJob.status: "running",
+            ProcessingJob.stage: stage,
+            ProcessingJob.progress: _clamp_progress(progress),
+            ProcessingJob.error_message: message,
+            ProcessingJob.started_at: func.coalesce(ProcessingJob.started_at, now),
+            ProcessingJob.finished_at: None,
+            ProcessingJob.updated_at: now,
+        },
+    )
 
 
 def update_processing_job(
@@ -85,15 +90,23 @@ def update_processing_job(
     stage: str,
     progress: int,
     message: str = "",
-) -> None:
-    if job is None or job.status == "cancelled":
-        return
-    job.status = "running"
-    job.stage = stage
-    job.progress = _clamp_progress(progress)
-    job.error_message = message
-    job.started_at = job.started_at or utc_now()
-    db.flush()
+) -> bool:
+    if job is None:
+        return False
+    now = utc_now()
+    return _conditional_job_update(
+        db,
+        job,
+        allowed_statuses=ACTIVE_STATUSES,
+        values={
+            ProcessingJob.status: "running",
+            ProcessingJob.stage: stage,
+            ProcessingJob.progress: _clamp_progress(progress),
+            ProcessingJob.error_message: message,
+            ProcessingJob.started_at: func.coalesce(ProcessingJob.started_at, now),
+            ProcessingJob.updated_at: now,
+        },
+    )
 
 
 def complete_processing_job(
@@ -102,18 +115,24 @@ def complete_processing_job(
     *,
     stage: str = "completed",
     message: str = "",
-) -> None:
+) -> bool:
     if job is None:
-        return
-    if job.status == "cancelled":
-        return
-    job.status = "completed"
-    job.stage = stage
-    job.progress = 100
-    job.error_message = message
-    job.started_at = job.started_at or utc_now()
-    job.finished_at = utc_now()
-    db.flush()
+        return False
+    now = utc_now()
+    return _conditional_job_update(
+        db,
+        job,
+        allowed_statuses=ACTIVE_STATUSES,
+        values={
+            ProcessingJob.status: "completed",
+            ProcessingJob.stage: stage,
+            ProcessingJob.progress: 100,
+            ProcessingJob.error_message: message,
+            ProcessingJob.started_at: func.coalesce(ProcessingJob.started_at, now),
+            ProcessingJob.finished_at: now,
+            ProcessingJob.updated_at: now,
+        },
+    )
 
 
 def fail_processing_job(
@@ -122,18 +141,24 @@ def fail_processing_job(
     *,
     stage: str = "failed",
     message: str,
-) -> None:
+) -> bool:
     if job is None:
-        return
-    if job.status == "cancelled":
-        return
-    job.status = "failed"
-    job.stage = stage
-    job.progress = 100
-    job.error_message = message[:1000]
-    job.started_at = job.started_at or utc_now()
-    job.finished_at = utc_now()
-    db.flush()
+        return False
+    now = utc_now()
+    return _conditional_job_update(
+        db,
+        job,
+        allowed_statuses=ACTIVE_STATUSES,
+        values={
+            ProcessingJob.status: "failed",
+            ProcessingJob.stage: stage,
+            ProcessingJob.progress: 100,
+            ProcessingJob.error_message: message[:1000],
+            ProcessingJob.started_at: func.coalesce(ProcessingJob.started_at, now),
+            ProcessingJob.finished_at: now,
+            ProcessingJob.updated_at: now,
+        },
+    )
 
 
 def cancel_processing_job(
@@ -142,13 +167,20 @@ def cancel_processing_job(
     *,
     message: str = CANCEL_MARKED_MESSAGE,
 ) -> ProcessingJob:
-    if job.status not in TERMINAL_STATUSES:
-        job.status = "cancelled"
-        job.stage = "cancelled"
-        job.progress = 100
-        job.error_message = message
-        job.finished_at = utc_now()
-        db.flush()
+    now = utc_now()
+    _conditional_job_update(
+        db,
+        job,
+        allowed_statuses=ACTIVE_STATUSES,
+        values={
+            ProcessingJob.status: "cancelled",
+            ProcessingJob.stage: "cancelled",
+            ProcessingJob.progress: 100,
+            ProcessingJob.error_message: message,
+            ProcessingJob.finished_at: now,
+            ProcessingJob.updated_at: now,
+        },
+    )
     return job
 
 
@@ -185,15 +217,21 @@ def recover_interrupted_processing_jobs(db: Session) -> int:
     return recovered
 
 
-def reset_failed_processing_job(db: Session, job: ProcessingJob) -> ProcessingJob:
-    job.status = "queued"
-    job.stage = "queued"
-    job.progress = 0
-    job.error_message = ""
-    job.started_at = None
-    job.finished_at = None
-    db.flush()
-    return job
+def reset_failed_processing_job(db: Session, job: ProcessingJob) -> bool:
+    return _conditional_job_update(
+        db,
+        job,
+        allowed_statuses={"failed", "cancelled"},
+        values={
+            ProcessingJob.status: "queued",
+            ProcessingJob.stage: "queued",
+            ProcessingJob.progress: 0,
+            ProcessingJob.error_message: "",
+            ProcessingJob.started_at: None,
+            ProcessingJob.finished_at: None,
+            ProcessingJob.updated_at: utc_now(),
+        },
+    )
 
 
 def job_metadata(job: ProcessingJob | None) -> dict[str, Any]:
@@ -212,6 +250,12 @@ def set_job_metadata(db: Session, job: ProcessingJob, metadata: dict[str, Any]) 
 
 
 def processing_job_payload(job: ProcessingJob, document: Document | None = None) -> dict:
+    metadata = job_metadata(job)
+    safe_metadata = {
+        key: metadata[key]
+        for key in ("ocr_job_id", "start_page", "max_pages", "mode")
+        if key in metadata
+    }
     return {
         "id": job.id,
         "course_id": job.course_id,
@@ -225,6 +269,8 @@ def processing_job_payload(job: ProcessingJob, document: Document | None = None)
         "finished_at": job.finished_at,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
+        "metadata": safe_metadata,
+        "ocr_job_id": safe_metadata.get("ocr_job_id") if job.job_type == "ocr" else None,
         "document": _document_summary(document) if document is not None else None,
     }
 
@@ -254,6 +300,34 @@ def _document_summary(document: Document) -> dict:
 
 def _clamp_progress(value: int) -> int:
     return max(0, min(100, int(value)))
+
+
+def _conditional_job_update(
+    db: Session,
+    job: ProcessingJob,
+    *,
+    allowed_statuses: set[str],
+    values: dict,
+) -> bool:
+    """Apply a state transition only while the persisted job is eligible.
+
+    The status predicate is evaluated by the database, which closes the race
+    where a worker holds a stale ORM object after another request cancels it.
+    """
+    with db.no_autoflush:
+        updated = (
+            db.query(ProcessingJob)
+            .filter(
+                ProcessingJob.id == job.id,
+                ProcessingJob.status.in_(allowed_statuses),
+            )
+            .update(values, synchronize_session=False)
+        )
+    if not updated:
+        return False
+    db.flush()
+    db.refresh(job)
+    return True
 
 
 def _mark_document_interrupted(db: Session, job: ProcessingJob) -> None:

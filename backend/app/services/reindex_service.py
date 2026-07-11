@@ -5,12 +5,14 @@ import json
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.entities import Document, DocumentChunk
+from app.models.entities import Course, Document, DocumentChunk
 from app.services.embedding_service import embedding_provider_label
 from app.services.vector_store import (
+    NON_RETRIEVABLE_DOCUMENT_STATUSES,
     delete_chunks_from_index,
     delete_course_index,
     delete_document_index,
+    reconcile_course_index,
     upsert_chunks_to_index,
     vectorize,
 )
@@ -20,19 +22,30 @@ from app.utils.time import utc_now
 def reindex_course(db: Session, course_id: int) -> dict:
     chunks = (
         db.query(DocumentChunk)
-        .filter(DocumentChunk.course_id == course_id)
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .join(Course, Course.id == Document.course_id)
+        .filter(
+            Course.id == course_id,
+            Document.course_id == course_id,
+            DocumentChunk.course_id == course_id,
+            ~Document.status.in_(NON_RETRIEVABLE_DOCUMENT_STATUSES),
+        )
         .order_by(DocumentChunk.document_id.asc(), DocumentChunk.chunk_index.asc())
         .all()
     )
     delete_course_index(course_id)
     _refresh_chunk_sparse_vectors(chunks)
     upsert_chunks_to_index(chunks)
+    vector_reconciliation = reconcile_course_index(db, course_id)
 
     documents = db.query(Document).filter(Document.course_id == course_id).all()
     touched_document_ids = {chunk.document_id for chunk in chunks}
     for document in documents:
         document.chunk_count = (
-            db.query(func.count(DocumentChunk.id)).filter(DocumentChunk.document_id == document.id).scalar() or 0
+            db.query(func.count(DocumentChunk.id))
+            .filter(DocumentChunk.document_id == document.id)
+            .scalar()
+            or 0
         )
         if document.id in touched_document_ids:
             document.status = "indexed" if document.chunk_count else "empty"
@@ -47,13 +60,22 @@ def reindex_course(db: Session, course_id: int) -> dict:
         "document_count": len(touched_document_ids),
         "chunk_count": len(chunks),
         "embedding_provider": embedding_provider_label(),
+        "vector_reconciliation": vector_reconciliation,
     }
 
 
 def reindex_document(db: Session, document: Document) -> dict:
     chunks = (
         db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == document.id)
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .join(Course, Course.id == Document.course_id)
+        .filter(
+            DocumentChunk.document_id == document.id,
+            DocumentChunk.course_id == document.course_id,
+            Document.course_id == document.course_id,
+            Course.id == document.course_id,
+            ~Document.status.in_(NON_RETRIEVABLE_DOCUMENT_STATUSES),
+        )
         .order_by(DocumentChunk.chunk_index.asc())
         .all()
     )
@@ -63,6 +85,7 @@ def reindex_document(db: Session, document: Document) -> dict:
         delete_document_index(document.id)
     _refresh_chunk_sparse_vectors(chunks)
     upsert_chunks_to_index(chunks)
+    vector_reconciliation = reconcile_course_index(db, document.course_id)
 
     document.chunk_count = len(chunks)
     if chunks:
@@ -79,6 +102,7 @@ def reindex_document(db: Session, document: Document) -> dict:
         "document_name": document.original_filename,
         "chunk_count": len(chunks),
         "embedding_provider": embedding_provider_label(),
+        "vector_reconciliation": vector_reconciliation,
     }
 
 

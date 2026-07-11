@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 from itertools import combinations
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,7 +31,6 @@ from app.services.mastery_service import (
     mastery_delta,
 )
 from app.utils.time import ensure_utc, utc_now
-
 
 DEMO_USER_ID = "demo-user"
 
@@ -165,10 +164,16 @@ def sync_course_knowledge_points(
     query = db.query(DocumentChunk).filter(DocumentChunk.course_id == course_id)
     if document_id is not None:
         query = query.filter(DocumentChunk.document_id == document_id)
-    chunks = query.order_by(DocumentChunk.document_id.asc(), DocumentChunk.chunk_index.asc()).limit(160).all()
+    chunks = (
+        query.order_by(DocumentChunk.document_id.asc(), DocumentChunk.chunk_index.asc())
+        .limit(160)
+        .all()
+    )
 
     if chunks:
-        llm_candidates = _llm_candidate_points_for_chunks(course.name, chunks) if document_id is not None else {}
+        llm_candidates = (
+            _llm_candidate_points_for_chunks(course.name, chunks) if document_id is not None else {}
+        )
         for chunk in chunks:
             rule_candidates = [
                 {
@@ -178,7 +183,9 @@ def sync_course_knowledge_points(
                 }
                 for name in _candidate_names_for_chunk(course.name, chunk.content)
             ]
-            for item in _unique_candidate_items([*llm_candidates.get(chunk.id, []), *rule_candidates])[:4]:
+            for item in _unique_candidate_items(
+                [*llm_candidates.get(chunk.id, []), *rule_candidates]
+            )[:4]:
                 point = _get_or_create_knowledge_point(
                     db,
                     course_id=course_id,
@@ -202,22 +209,42 @@ def get_learning_profile(db: Session, course_id: int, user_id: str | None = None
     sync_course_knowledge_points(db, course_id, user_id=user_id)
     points = _knowledge_status_payloads(db, course_id, user_id)
     weak_points = sorted(points, key=lambda item: (item["mastery_score"], -item["wrong_count"]))[:5]
-    attempts_count = db.query(func.count(QuestionAttempt.id)).filter(
-        QuestionAttempt.course_id == course_id,
-        QuestionAttempt.user_id == user_id,
-    ).scalar() or 0
-    correct_count = db.query(func.count(QuestionAttempt.id)).filter(
-        QuestionAttempt.course_id == course_id,
-        QuestionAttempt.user_id == user_id,
-        QuestionAttempt.is_correct.is_(True),
-    ).scalar() or 0
-    question_count = db.query(func.count(ChatMessage.id)).filter(ChatMessage.course_id == course_id).scalar() or 0
-    generated_count = (
-        db.query(func.count(GeneratedMaterial.id)).filter(GeneratedMaterial.course_id == course_id).scalar()
+    attempts_count = (
+        db.query(func.count(QuestionAttempt.id))
+        .filter(
+            QuestionAttempt.course_id == course_id,
+            QuestionAttempt.user_id == user_id,
+        )
+        .scalar()
         or 0
     )
-    document_count = db.query(func.count(Document.id)).filter(Document.course_id == course_id).scalar() or 0
-    chunk_count = db.query(func.count(DocumentChunk.id)).filter(DocumentChunk.course_id == course_id).scalar() or 0
+    correct_count = (
+        db.query(func.count(QuestionAttempt.id))
+        .filter(
+            QuestionAttempt.course_id == course_id,
+            QuestionAttempt.user_id == user_id,
+            QuestionAttempt.is_correct.is_(True),
+        )
+        .scalar()
+        or 0
+    )
+    question_count = (
+        db.query(func.count(ChatMessage.id)).filter(ChatMessage.course_id == course_id).scalar()
+        or 0
+    )
+    generated_count = (
+        db.query(func.count(GeneratedMaterial.id))
+        .filter(GeneratedMaterial.course_id == course_id)
+        .scalar()
+        or 0
+    )
+    document_count = (
+        db.query(func.count(Document.id)).filter(Document.course_id == course_id).scalar() or 0
+    )
+    chunk_count = (
+        db.query(func.count(DocumentChunk.id)).filter(DocumentChunk.course_id == course_id).scalar()
+        or 0
+    )
     pending_tasks = _review_task_payloads(
         db,
         course_id,
@@ -252,6 +279,108 @@ def get_learning_profile(db: Session, course_id: int, user_id: str | None = None
         "recent_attempts": recent_attempts,
         "pending_tasks": pending_tasks,
     }
+
+
+def get_dashboard_summary(
+    db: Session,
+    courses: list[Course],
+    user_id: str,
+) -> dict:
+    """Build one dashboard view from every course owned by the user."""
+    profiles: list[tuple[Course, dict]] = [
+        (course, get_learning_profile(db, course.id, user_id)) for course in courses
+    ]
+
+    knowledge_points: list[dict] = []
+    weak_candidates: list[dict] = []
+    pending_tasks: list[dict] = []
+    recommendations: list[dict] = []
+    recent_questions: list[dict] = []
+    recent_attempts: list[dict] = []
+    document_count = 0
+    chunk_count = 0
+    study_actions = 0
+    mastery_total = 0.0
+
+    for course, profile in profiles:
+        summary = profile.get("summary") or {}
+        document_count += int(summary.get("document_count") or 0)
+        chunk_count += int(summary.get("chunk_count") or 0)
+        study_actions += int(summary.get("study_actions") or 0)
+        course_points = [
+            _with_course_context(item, course) for item in profile.get("knowledge_points") or []
+        ]
+        knowledge_points.extend(course_points)
+        mastery_total += sum(float(item.get("mastery_score") or 0.0) for item in course_points)
+        weak_candidates.extend(course_points)
+        pending_tasks.extend(
+            _with_course_context(item, course) for item in profile.get("pending_tasks") or []
+        )
+        recent_questions.extend(
+            _with_course_context(item, course) for item in profile.get("recent_questions") or []
+        )
+        recent_attempts.extend(
+            _with_course_context(item, course) for item in profile.get("recent_attempts") or []
+        )
+
+        mastery_by_point = {
+            int(item["id"]): float(item.get("mastery_score") or 0.0)
+            for item in course_points
+            if item.get("id") is not None
+        }
+        for item in profile.get("recommendations") or []:
+            enriched = _with_course_context(item, course)
+            point_id = enriched.get("knowledge_point_id")
+            enriched["mastery_score"] = (
+                mastery_by_point.get(int(point_id), 100.0) if point_id else 100.0
+            )
+            recommendations.append(enriched)
+
+    weak_points = sorted(
+        weak_candidates,
+        key=lambda item: (
+            float(item.get("mastery_score") or 0.0),
+            -int(item.get("wrong_count") or 0),
+        ),
+    )
+    pending_tasks.sort(
+        key=lambda item: (
+            -int(item.get("priority") or 0),
+            str(item.get("deadline") or "9999-12-31"),
+        )
+    )
+    recommendations.sort(
+        key=lambda item: (
+            float(item.get("mastery_score") or 100.0),
+            int(item.get("rank") or 999),
+        )
+    )
+    recent_questions.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    recent_attempts.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    weak_point_count = sum(1 for item in knowledge_points if item.get("state") == "weak")
+
+    return {
+        "summary": {
+            "course_count": len(courses),
+            "document_count": document_count,
+            "chunk_count": chunk_count,
+            "knowledge_point_count": len(knowledge_points),
+            "weak_point_count": weak_point_count,
+            "study_actions": study_actions,
+            "overall_mastery": (
+                round(mastery_total / len(knowledge_points), 1) if knowledge_points else 0.0
+            ),
+        },
+        "weak_points": weak_points[:12],
+        "pending_tasks": pending_tasks[:12],
+        "recommendations": recommendations[:12],
+        "recent_questions": recent_questions[:12],
+        "recent_attempts": recent_attempts[:12],
+    }
+
+
+def _with_course_context(item: dict, course: Course) -> dict:
+    return {**item, "course_id": course.id, "course_name": course.name}
 
 
 def get_knowledge_graph(db: Session, course_id: int, user_id: str | None = None) -> dict:
@@ -308,7 +437,9 @@ def record_question_attempt(
     sync_course_knowledge_points(db, course_id, user_id=user_id)
     point = _resolve_attempt_point(db, course_id, payload.knowledge_point_id, user_id)
     error_reason = payload.error_reason.strip() or _infer_error_reason(payload)
-    correct_answer = payload.correct_answer.strip() or (payload.user_answer.strip() if payload.is_correct else "")
+    correct_answer = payload.correct_answer.strip() or (
+        payload.user_answer.strip() if payload.is_correct else ""
+    )
 
     attempt = QuestionAttempt(
         user_id=user_id,
@@ -401,16 +532,56 @@ def update_review_task_status(
     user_id: str | None = None,
 ) -> dict | None:
     user_id = _resolve_user_id(db, course_id, user_id)
-    task = db.get(ReviewTask, task_id)
-    if task is None or task.course_id != course_id or task.user_id != user_id:
+    task = (
+        db.query(ReviewTask)
+        .filter(
+            ReviewTask.id == task_id,
+            ReviewTask.course_id == course_id,
+            ReviewTask.user_id == user_id,
+        )
+        .first()
+    )
+    if task is None:
         return None
-    task.status = status
-    if status == "done" and task.knowledge_point_id:
-        knowledge_status = _ensure_status(db, course_id, task.knowledge_point_id, user_id)
-        knowledge_status.mastery_score = min(100.0, knowledge_status.mastery_score + 6)
-        knowledge_status.review_count += 1
-        knowledge_status.last_review_time = utc_now()
+    now = utc_now()
+    if status == "done":
+        with db.no_autoflush:
+            transitioned = (
+                db.query(ReviewTask)
+                .filter(
+                    ReviewTask.id == task_id,
+                    ReviewTask.course_id == course_id,
+                    ReviewTask.user_id == user_id,
+                    ReviewTask.status != "done",
+                )
+                .update(
+                    {ReviewTask.status: "done", ReviewTask.updated_at: now},
+                    synchronize_session=False,
+                )
+            )
+        if transitioned and task.knowledge_point_id:
+            knowledge_status = _ensure_status(db, course_id, task.knowledge_point_id, user_id)
+            db.flush()
+            (
+                db.query(UserKnowledgeStatus)
+                .filter(UserKnowledgeStatus.id == knowledge_status.id)
+                .update(
+                    {
+                        UserKnowledgeStatus.mastery_score: case(
+                            (UserKnowledgeStatus.mastery_score >= 94.0, 100.0),
+                            else_=UserKnowledgeStatus.mastery_score + 6.0,
+                        ),
+                        UserKnowledgeStatus.review_count: UserKnowledgeStatus.review_count + 1,
+                        UserKnowledgeStatus.last_review_time: now,
+                        UserKnowledgeStatus.updated_at: now,
+                    },
+                    synchronize_session=False,
+                )
+            )
+    else:
+        task.status = status
     db.commit()
+    db.refresh(task)
     point_name = ""
     if task.knowledge_point_id:
         point = db.get(KnowledgePoint, task.knowledge_point_id)
@@ -472,7 +643,9 @@ def _candidate_names_for_chunk(course_name: str, content: str) -> list[str]:
     ][:8]
 
 
-def _llm_candidate_points_for_chunks(course_name: str, chunks: list[DocumentChunk]) -> dict[int, list[dict]]:
+def _llm_candidate_points_for_chunks(
+    course_name: str, chunks: list[DocumentChunk]
+) -> dict[int, list[dict]]:
     sampled_chunks = chunks[:LLM_EXTRACTION_CHUNK_LIMIT]
     if not sampled_chunks:
         return {}
@@ -515,7 +688,9 @@ def _llm_candidate_points_for_chunks(course_name: str, chunks: list[DocumentChun
         chunk_id = _coerce_int(item.get("chunk_id"))
         if chunk_id not in valid_chunk_ids:
             chunk_id = fallback_chunk_id
-        description = str(item.get("description") or f"由大模型从课程资料中抽取出的知识点：{name}").strip()
+        description = str(
+            item.get("description") or f"由大模型从课程资料中抽取出的知识点：{name}"
+        ).strip()
         evidence = str(item.get("evidence") or "").strip()[:240]
         difficulty = str(item.get("difficulty") or "").strip().lower()
         if difficulty in {"easy", "medium", "hard"} and "难度" not in description:
@@ -560,7 +735,9 @@ def _unique_candidate_items(items: list[dict]) -> list[dict]:
         unique.append(
             {
                 "name": name,
-                "description": str(item.get("description") or f"从课程资料中识别出的知识点：{name}").strip(),
+                "description": str(
+                    item.get("description") or f"从课程资料中识别出的知识点：{name}"
+                ).strip(),
                 "evidence": str(item.get("evidence") or "").strip()[:240],
             }
         )
@@ -659,7 +836,10 @@ def _resolve_user_id(db: Session, course_id: int, user_id: str | None) -> str:
 
 
 def _ensure_all_statuses(db: Session, course_id: int, user_id: str) -> None:
-    point_ids = [row[0] for row in db.query(KnowledgePoint.id).filter(KnowledgePoint.course_id == course_id).all()]
+    point_ids = [
+        row[0]
+        for row in db.query(KnowledgePoint.id).filter(KnowledgePoint.course_id == course_id).all()
+    ]
     for point_id in point_ids:
         _ensure_status(db, course_id, point_id, user_id)
 
@@ -704,7 +884,9 @@ def _knowledge_status_payloads(db: Session, course_id: int, user_id: str) -> lis
     return [_status_payload(db, point, status, user_id) for point, status in rows]
 
 
-def _status_payload(db: Session, point: KnowledgePoint, status: UserKnowledgeStatus, user_id: str) -> dict:
+def _status_payload(
+    db: Session, point: KnowledgePoint, status: UserKnowledgeStatus, user_id: str
+) -> dict:
     mastery = calculate_mastery(db, point, status, user_id)
     score = mastery.score
     state = _mastery_state(score)
@@ -750,13 +932,17 @@ def _mastery_state(score: float) -> str:
     return "weak"
 
 
-def _next_action_for_status(point: KnowledgePoint, score: float, state: str, wrong_count: int) -> str:
+def _next_action_for_status(
+    point: KnowledgePoint, score: float, state: str, wrong_count: int
+) -> str:
     page_text = f"资料 P{point.source_page}" if point.source_page else "对应课程资料"
     if state == "weak":
         reason = "最近错题较多" if wrong_count else "缺少有效练习记录或掌握度偏低"
         return f"先回看{page_text}中的证据片段，整理定义/条件/易错点，再做 3 道基础题和 1 道变式题。判定原因：{reason}，当前 {score} 分。"
     if state == "review":
-        return f"回看{page_text}，补做 2 道同类题确认是否真正掌握。当前 {score} 分，属于需要复习区间。"
+        return (
+            f"回看{page_text}，补做 2 道同类题确认是否真正掌握。当前 {score} 分，属于需要复习区间。"
+        )
     return f"保持节奏：每周用 1 道综合题复测，并在遗忘前回看{page_text}。当前 {score} 分。"
 
 
@@ -764,7 +950,9 @@ def _recommendations_from_weak_points(weak_points: list[dict]) -> list[dict]:
     recommendations: list[dict] = []
     for index, point in enumerate(weak_points[:5], start=1):
         difficulty = "mistake" if point["wrong_count"] else "basic"
-        page_text = f"回看资料 P{point['source_page']}" if point["source_page"] else "补充课程资料来源"
+        page_text = (
+            f"回看资料 P{point['source_page']}" if point["source_page"] else "补充课程资料来源"
+        )
         recommendations.append(
             {
                 "rank": index,
@@ -791,7 +979,9 @@ def _resolve_attempt_point(
     weak_points = _knowledge_status_payloads(db, course_id, user_id)
     if not weak_points:
         return None
-    weakest_id = sorted(weak_points, key=lambda item: (item["mastery_score"], -item["wrong_count"]))[0]["id"]
+    weakest_id = sorted(
+        weak_points, key=lambda item: (item["mastery_score"], -item["wrong_count"])
+    )[0]["id"]
     return db.get(KnowledgePoint, weakest_id)
 
 
@@ -876,7 +1066,10 @@ def _select_plan_points(db: Session, course_id: int, goals: str, user_id: str) -
         matched = [
             point
             for point in points
-            if any(term in point["name"].lower() or term in point["description"].lower() for term in goal_terms)
+            if any(
+                term in point["name"].lower() or term in point["description"].lower()
+                for term in goal_terms
+            )
         ]
         if matched:
             points = matched
@@ -1010,7 +1203,11 @@ def _review_task_payloads(
             ReviewTask.user_id == user_id,
             ReviewTask.status.in_(status_filter),
         )
-        .order_by(ReviewTask.priority.desc(), ReviewTask.deadline.asc().nullslast(), ReviewTask.created_at.desc())
+        .order_by(
+            ReviewTask.priority.desc(),
+            ReviewTask.deadline.asc().nullslast(),
+            ReviewTask.created_at.desc(),
+        )
         .limit(limit)
         .all()
     )
@@ -1019,7 +1216,10 @@ def _review_task_payloads(
         if task.knowledge_point_id and task.knowledge_point_id not in point_names:
             point = db.get(KnowledgePoint, task.knowledge_point_id)
             point_names[task.knowledge_point_id] = point.name if point else ""
-    return [_review_task_payload(task, point_names.get(task.knowledge_point_id or 0, "")) for task in tasks]
+    return [
+        _review_task_payload(task, point_names.get(task.knowledge_point_id or 0, ""))
+        for task in tasks
+    ]
 
 
 def _review_task_payload(task: ReviewTask, point_name: str) -> dict:
