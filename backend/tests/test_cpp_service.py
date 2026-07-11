@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import shutil
 import sys
+
+import pytest
 
 
 def test_cpp_analyze_empty_payload_returns_400(client, auth_helpers):
@@ -94,6 +97,54 @@ def test_cpp_run_docker_sandbox_is_not_reported_available(monkeypatch):
     assert payload["sandbox_level"] == "unsupported:docker"
     assert payload["compile_result"]["executed"] is False
     assert "尚未实现" in payload["compile_result"]["stderr"]
+
+
+@pytest.mark.skipif(shutil.which("g++") is None, reason="g++ is required")
+def test_cpp_normal_program_runs_with_bounded_capture(monkeypatch):
+    service = _enabled_cpp_service(monkeypatch)
+
+    payload = service.compile_and_run_cpp(
+        '#include <iostream>\nint main(){std::cout << "ok";}', sample_input="run"
+    )
+
+    assert payload["compile_result"]["success"] is True
+    assert payload["run_result"]["success"] is True
+    assert payload["run_result"]["stdout"] == "ok"
+    assert payload["run_result"]["output_limit_exceeded"] is False
+
+
+@pytest.mark.skipif(shutil.which("g++") is None, reason="g++ is required")
+def test_cpp_infinite_output_is_terminated_at_capture_limit(monkeypatch):
+    service = _enabled_cpp_service(monkeypatch, output_limit=4096)
+
+    payload = service.compile_and_run_cpp(
+        '#include <iostream>\nint main(){while(true){std::cout << "xxxxxxxxxxxxxxxx";}}',
+        sample_input="run",
+    )
+
+    assert payload["run_result"]["success"] is False
+    assert payload["run_result"]["output_limit_exceeded"] is True
+    assert len(payload["run_result"]["stdout"].encode("utf-8")) <= 4096
+
+
+@pytest.mark.skipif(shutil.which("g++") is None, reason="g++ is required")
+def test_cpp_infinite_loop_is_terminated_at_timeout(monkeypatch):
+    service = _enabled_cpp_service(monkeypatch, timeout=1)
+
+    payload = service.compile_and_run_cpp("int main(){while(true){}}", sample_input="run")
+
+    assert payload["run_result"]["success"] is False
+    assert payload["run_result"]["timeout"] is True
+    assert payload["run_result"]["output_limit_exceeded"] is False
+
+
+def _enabled_cpp_service(monkeypatch, *, output_limit=262144, timeout=5):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("CPP_RUN_ENABLED", "true")
+    monkeypatch.setenv("CPP_RUN_SANDBOX", "none")
+    monkeypatch.setenv("CPP_OUTPUT_LIMIT_BYTES", str(output_limit))
+    monkeypatch.setenv("CPP_RUN_TIMEOUT_SECONDS", str(timeout))
+    return _reload_cpp_compile_service()
 
 
 def _reload_cpp_compile_service():

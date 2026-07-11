@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
@@ -19,6 +21,7 @@ from app.services.learning_service import (
 from app.services.report_service import generate_learning_report_pdf
 
 router = APIRouter(prefix="/courses/{course_id}/learning", tags=["learning"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/sync")
@@ -77,7 +80,8 @@ def export_learning_report(
     try:
         content = generate_learning_report_pdf(db, course_id, learning_user_id(current_user))
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("Learning report generation failed for course %s", course_id)
+        raise HTTPException(status_code=500, detail="学习报告生成失败，请稍后重试") from exc
     filename = f"studymate-course-{course_id}-learning-report.pdf"
     return Response(
         content=content,
