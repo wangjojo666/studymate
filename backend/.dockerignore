@@ -1,0 +1,16 @@
+.env
+.env.*
+.venv/
+.venv-e2e/
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite*
+.pytest_cache/
+.ruff_cache/
+tests/
+storage/
+*.log
+*.pid
+.git/
+.gitignore

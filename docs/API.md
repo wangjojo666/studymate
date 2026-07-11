@@ -20,6 +20,22 @@ Authorization: Bearer <access_token>
 {
   "status": "ok",
   "name": "StudyMate",
+  "text_llm_provider": "mock",
+  "text_llm_model": "",
+  "embedding_provider": "hash",
+  "embedding_provider_actual": "hash/384d",
+  "embedding_model": "BAAI/bge-small-zh-v1.5",
+  "ocr_llm_provider": "mock",
+  "ocr_llm_model": "",
+  "retrieval_provider": "sqlite_sparse",
+  "active_backend": "sqlite_sparse",
+  "provider_labels": {
+    "text_generation": "离线规则生成",
+    "embedding": "Hash 检索",
+    "ocr": "离线文本提取",
+    "retrieval": "SQLite 稀疏检索"
+  },
+  "capability_label": "离线规则生成 · Hash 检索",
   "retrieval": {
     "chroma_available": false,
     "embedding_provider": "hash/384d",
@@ -123,7 +139,7 @@ Authorization: Bearer <access_token>
 
 `POST /courses/{course_id}/documents/{document_id}/ocr`
 
-创建后台 OCR 任务。后端会调用本地 `qwen3-vl:30b` 做 OCR，并把识别结果切分入库。
+创建后台 OCR 任务并把识别结果切分入库。默认 `OCR_LLM_PROVIDER=mock` 不会调用真实 OCR 模型；`fast` 模式优先使用 PDF 已有文本快速索引。需要逐页视觉 OCR 时，必须显式配置 `OCR_LLM_PROVIDER=ollama`、`OCR_LLM_MODEL`（例如 `qwen3-vl:30b`）及可访问的 Ollama 地址。
 单次 OCR 最多 20 页，建议优先使用 `fast` 模式处理 5-10 页。
 
 ```json

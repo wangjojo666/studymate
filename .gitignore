@@ -1,6 +1,9 @@
 backend/.venv/
 backend/.venv-e2e/
 backend/studymate.db
+*.db
+*.sqlite
+*.sqlite3
 backend/storage/*
 !backend/storage/uploads/
 backend/storage/uploads/*
@@ -10,6 +13,11 @@ frontend/dist/
 frontend/.e2e-storage/
 frontend/playwright-report/
 frontend/test-results/
+frontend/coverage/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage/
 __pycache__/
 *.pyc
 .DS_Store

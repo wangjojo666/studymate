@@ -8,7 +8,6 @@ import urllib.error
 import urllib.request
 import uuid
 
-
 BASE_URL = os.getenv("STUDYMATE_API_BASE_URL", "http://127.0.0.1:8000/api").rstrip("/")
 AUTH_TOKEN = ""
 TERMINAL_DOCUMENT_STATUSES = {"indexed", "empty", "failed", "needs_ocr", "needs_vision"}
@@ -41,7 +40,9 @@ def main() -> int:
         AUTH_TOKEN = auth["access_token"]
         print_step("login", bool(AUTH_TOKEN), {"user": auth.get("user")})
 
-        course = request_json("POST", "/courses", {"name": course_name, "description": "smoke test"})
+        course = request_json(
+            "POST", "/courses", {"name": course_name, "description": "smoke test"}
+        )
         course_id = course["id"]
         print_step("create course", bool(course_id), course)
 
@@ -114,9 +115,9 @@ def upload_txt(course_id: int, filename: str, content: str) -> dict:
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         "Content-Type: text/plain; charset=utf-8\r\n\r\n"
-    ).encode("utf-8")
+    ).encode()
     body += content.encode("utf-8")
-    body += f"\r\n--{boundary}--\r\n".encode("utf-8")
+    body += f"\r\n--{boundary}--\r\n".encode()
     request = urllib.request.Request(
         f"{BASE_URL}/courses/{course_id}/documents",
         data=body,
@@ -164,7 +165,9 @@ def wait_document_indexed(
                 f"{last_document.get('error_message') or 'no error_message'}"
             )
         time.sleep(interval)
-    raise RuntimeError(f"document {document_id} did not reach indexed within {timeout_seconds}s; last={last_document}")
+    raise RuntimeError(
+        f"document {document_id} did not reach indexed within {timeout_seconds}s; last={last_document}"
+    )
 
 
 def print_step(name: str, ok: bool, detail: object) -> None:

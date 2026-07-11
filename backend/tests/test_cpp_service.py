@@ -52,7 +52,9 @@ def test_cpp_compile_error_reported(client, auth_helpers):
 
 def test_cpp_sample_run_output(client, auth_helpers):
     course = auth_helpers.create_course("CPP Run")
-    code = "#include <iostream>\nusing namespace std;\nint main(){ int x; cin >> x; cout << x + 1; }"
+    code = (
+        "#include <iostream>\nusing namespace std;\nint main(){ int x; cin >> x; cout << x + 1; }"
+    )
 
     response = client.post(
         f"/api/courses/{course['id']}/cpp/analyze",

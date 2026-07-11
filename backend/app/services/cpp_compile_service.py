@@ -8,9 +8,10 @@ from pathlib import Path
 
 from app.config import settings
 
-
 SAFE_MODE_MESSAGE = "当前处于安全演示模式，未执行本地编译运行。"
-PRODUCTION_REJECT_MESSAGE = "生产环境未配置真实 C++ 沙箱，已拒绝本地编译运行。当前能力只有临时目录和 timeout。"
+PRODUCTION_REJECT_MESSAGE = (
+    "生产环境未配置真实 C++ 沙箱，已拒绝本地编译运行。当前能力只有临时目录和 timeout。"
+)
 UNSUPPORTED_SANDBOX_MESSAGE = "CPP_RUN_SANDBOX={sandbox} 尚未实现，未执行本地编译运行。"
 
 
@@ -157,7 +158,11 @@ def compile_and_run_cpp(code: str, sample_input: str = "") -> dict:
                 stderr=exc.stderr or "",
                 timeout=True,
             )
-        return {"sandbox_level": sandbox_level, "compile_result": compile_result, "run_result": run_result}
+        return {
+            "sandbox_level": sandbox_level,
+            "compile_result": compile_result,
+            "run_result": run_result,
+        }
 
 
 def _compile_payload(

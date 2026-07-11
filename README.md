@@ -1,208 +1,189 @@
-# StudyMate：课程资料智能学习辅助原型系统
+# StudyMate：课程资料智能学习辅助原型
 
-StudyMate 是面向课程设计/答辩展示的课程资料智能学习辅助原型系统，不是成熟商业 AI 学习平台。项目重点是把一条可解释、可演示的工程闭环跑通：
+StudyMate 是面向课程设计和答辩展示的学习辅助系统。它覆盖资料上传、解析、检索增强问答、练习、复习计划、学习诊断和 PDF 报告，但默认离线配置不调用真实大模型，也不应被描述为生产级 AI 平台。
 
-课程资料上传 → 文档解析 → 切片入库 → RAG 问答 → 练习生成 → 错题记录 → 学习诊断 → PDF 报告。
+## 能力边界
 
-默认配置采用 mock/offline 文本生成和 hash embedding，保证无 API key、无联网环境也能稳定演示。真实语义检索和真实大模型生成是可选增强，不能把默认模式夸大成完整 AI 能力。
+| 能力 | 默认配置 | 说明 |
+| --- | --- | --- |
+| 文本生成 | `TEXT_LLM_PROVIDER=mock` | 离线规则生成，不调用大模型 |
+| Embedding | `EMBEDDING_PROVIDER=hash` | 确定性 Hash 检索兜底，不是语义模型 |
+| 向量索引 | 可选 Chroma | 只作检索索引；SQL 数据库始终是权限和数据存活状态的权威来源 |
+| OCR | `OCR_LLM_PROVIDER=mock` | 默认不具备真实 OCR；可显式配置 Ollama 视觉模型 |
+| C++ 执行 | `CPP_RUN_ENABLED=false` | 默认仅规则分析；本地执行不是安全沙箱 |
 
-## 项目定位
+页面从 `GET /api/health/detail` 读取实际 provider，因此 mock/hash 模式不会显示成 DeepSeek、BGE 或本地 OCR。可选的 Ollama、OpenAI-compatible、sentence-transformers 和 Chroma 依赖必须显式配置。
 
-- 面向课程设计和答辩展示，强调工程流程完整、模块边界清楚、结果可解释。
-- 默认 mock/offline 模式适合现场演示：稳定、无需 API key、不会因为模型服务不可用而中断。
-- 默认 hash embedding 是轻量兜底方案，能演示检索链路，但不等同于真实语义模型。
-- sentence-transformers 或 OpenAI-compatible embedding 可用于更真实的语义检索。
-- Ollama 或 OpenAI-compatible 文本模型可用于更自然的回答、提纲和练习生成。
-- 扫描版 PDF/OCR、C++ 本地编译运行都属于本地演示能力，不是生产级服务。
+## 环境要求
 
-## 演示模式 vs 真实模型模式
+- Python 3.11
+- Node.js 20 与 npm
+- Docker Engine 24+ 和 Docker Compose v2（仅容器部署需要）
 
-| 模式 | 配置 | 适用场景 | 说明 |
-| --- | --- | --- | --- |
-| mock/offline | `TEXT_LLM_PROVIDER=mock` | 答辩演示、离线运行 | 不调用外部模型，用规则和片段摘要保证稳定 |
-| hash embedding | `EMBEDDING_PROVIDER=hash` | 默认检索兜底 | 轻量、可运行，但不是深度语义检索 |
-| sentence-transformers | `EMBEDDING_PROVIDER=sentence_transformers` | 更真实的本地语义检索 | 需要额外安装模型依赖和下载模型 |
-| OpenAI-compatible embedding | `EMBEDDING_PROVIDER=openai_compatible` | 接入外部 embedding 服务 | 需要 base URL 和 key |
-| Ollama/OpenAI-compatible LLM | `TEXT_LLM_PROVIDER=ollama/openai_compatible` | 更真实文本生成 | 需要本地模型或 API 服务 |
+## 本地开发
 
-## 功能模块
-
-1. 用户登录与课程管理：注册、登录、课程创建、课程详情，课程数据按用户隔离。
-2. 课程资料上传与入库：支持 PDF、PPTX、DOCX、TXT、图片课件，后台完成解析、切片、索引和知识点同步。
-3. RAG 资料问答：返回回答状态、置信度、来源文件、页码、chunk、score、检索 provider 和模型 provider；证据不足时拒答。
-4. 复习提纲与练习生成：基于已入库资料生成提纲和练习题，默认离线模式也可演示。
-5. 可解释学习诊断：返回知识点掌握度、薄弱原因、证据片段、来源页码、最近练习摘要和下一步动作。
-6. C++ 代码分析：默认安全演示模式只做规则分析；显式开启后才调用本地 g++ 编译/运行。
-7. PDF 学习报告：导出课程资料、问答、薄弱点、错题、复习计划和建议。
-
-## 技术栈
-
-| 层次 | 技术 |
-| --- | --- |
-| 前端 | Vue 3、Vite、Element Plus、ECharts、Axios |
-| 后端 | FastAPI、SQLAlchemy、SQLite、Alembic |
-| 文档解析 | python-docx、python-pptx、pypdf、PyMuPDF |
-| 检索 | Chroma（可选）+ SQLite 稀疏检索兜底 |
-| AI 调用 | mock/offline、Ollama、OpenAI-compatible API |
-| 测试与 CI | pytest、GitHub Actions、npm build |
-
-## 运行步骤
+从仓库根目录开始。
 
 ### 后端
 
 ```powershell
-cd D:\sunny\studymate\backend
+cd backend
 python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+python -m alembic upgrade head
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-默认演示账号：
+开发配置可通过 `ENABLE_DEMO_USER=true` 创建演示账号：
 
 ```text
 demo@studymate.local / studymate-demo
 ```
 
+生产环境会拒绝启用 demo 用户。数据库结构只由 Alembic 管理；应用启动不会用 `create_all()` 或手写 `ALTER TABLE` 静默修改结构。
+
 ### 前端
 
 ```powershell
-cd D:\sunny\studymate\frontend
-npm install
+cd frontend
+npm ci
 npm run dev
 ```
 
-访问：
+访问 `http://127.0.0.1:5173`。
 
-```text
-http://127.0.0.1:5173
-```
+## Docker Compose
 
-### Docker Compose
-
-默认 Docker 配置使用 `TEXT_LLM_PROVIDER=mock` 和 `EMBEDDING_PROVIDER=hash`，不需要外部 API key，适合本地演示和答辩预览。
+### 本地演示
 
 ```powershell
-cd D:\sunny\studymate
 docker compose up --build
 ```
 
-访问：
+本地只发布 `127.0.0.1:8080` 的前端 Nginx。后端 `8000` 端口只存在于内部 Docker 网络，持久数据位于命名卷 `studymate-data`。
 
-```text
-http://127.0.0.1:8080
+### 生产配置
+
+```powershell
+Copy-Item .env.production.example .env.production
+# 在 .env.production 中填入独立生成的 AUTH_SECRET_KEY
+docker compose --env-file .env.production `
+  -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+docker compose --env-file .env.production `
+  -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 ```
 
-后端数据和上传文件挂载在：
+生产覆盖文件强制：
 
-```text
-backend/storage
-```
+- `APP_ENV=production`
+- `ENABLE_DEMO_USER=false`
+- `AUTH_SECRET_KEY` 必须由 shell、CI Secret 或未提交的环境文件注入；缺失或空值时 Compose 直接失败
+- 后端不向宿主机发布端口
+- provider、model、base URL、RAG、限流和上传限制均从未提交的 `.env.production` 透传；示例默认仍为 mock/hash
 
-首次部署前请复制并检查 `.env.production.example`，至少替换 `AUTH_SECRET_KEY`。如需接入真实模型，再修改对应 provider、base URL 和 key。
-`APP_ENV=production` 会在启动时拒绝默认开发密钥、示例占位密钥和过短密钥。
+默认仍把前端绑定到回环地址。需要由外部反向代理访问时，显式设置 `FRONTEND_BIND_ADDRESS`，并同时配置 HTTPS、代理信任和网络防火墙。
+Nginx 的 `NGINX_CLIENT_MAX_BODY_SIZE` 是 multipart 请求的边缘上限，默认 `110m`，需始终高于后端文件本体限制并预留表单编码开销。
+
+## 依赖分层
+
+- `backend/requirements.txt`：生产运行时
+- `backend/requirements-dev.txt`：pytest、httpx、Ruff 等开发工具
+- `backend/requirements-optional-chroma.txt`：可选 Chroma 索引
+
+生产镜像默认不安装测试工具或 Chroma。需要 Chroma 时可设置 Docker build 参数 `INSTALL_CHROMA=true`，并配置相应持久化与资源限制。
 
 ## 关键配置
 
 ```env
+APP_ENV=development
+ENABLE_DEMO_USER=true
 TEXT_LLM_PROVIDER=mock
+TEXT_LLM_FALLBACK_PROVIDER=none
 EMBEDDING_PROVIDER=hash
+OCR_LLM_PROVIDER=mock
+RERANK_PROVIDER=rule
 RAG_TOP_K=5
 RAG_MIN_SCORE=0.12
-RAG_CONTEXT_MAX_CHARS=6000
 RAG_ENABLE_STRICT_SOURCE_MODE=true
-RERANK_PROVIDER=rule
 CPP_RUN_ENABLED=false
-CPP_RUN_SANDBOX=none
-CPP_COMPILE_TIMEOUT_SECONDS=8
-CPP_RUN_TIMEOUT_SECONDS=5
-RATE_LIMIT_ENABLED=true
+RATE_LIMIT_ENABLED=false
 ```
 
-### 检索后端透明度
+完整说明见 [`backend/.env.example`](backend/.env.example) 和 [`.env.production.example`](.env.production.example)。真实模型密钥只应进入本机环境、CI Secret 或 Secret Manager，不得写入仓库或前端构建产物。
 
-后端提供 `GET /api/health/detail` 查看检索后端状态，包括 `chroma_available`、`embedding_provider`、`fallback_search`、`active_backend` 和 `search_order`。如果 Chroma 未安装、初始化失败或查询失败，系统会降级到 SQLite sparse search。默认 `hash` embedding 和 SQLite sparse search 只用于稳定演示检索链路，不能宣传成真实语义向量库或生产级检索能力。
+## 数据与迁移
 
-`RAG_ENABLE_STRICT_SOURCE_MODE=true` 时，如果最高检索分数低于 `RAG_MIN_SCORE`，后端不会调用 LLM，而是返回“资料中没有找到足够依据回答这个问题，请补充资料或换一个更贴近资料的问题。”
+```powershell
+cd backend
+$tempDb = Join-Path $env:TEMP ("studymate-alembic-" + [guid]::NewGuid().ToString("N") + ".db")
+$env:DATABASE_URL = "sqlite:///$($tempDb.Replace('\', '/'))"
+python -m alembic upgrade head
+python -m alembic check
+```
 
-`CPP_RUN_ENABLED=false` 是默认安全演示模式。开发环境设置为 `true` 后会在本机临时目录调用 `g++`，仅有超时限制，不是完整沙箱。`APP_ENV=production` 下打开 `CPP_RUN_ENABLED=true` 会启动失败；`CPP_RUN_SANDBOX=docker` 当前没有实现，也会被拒绝，避免误以为已经有沙箱。
+迁移验证应始终使用临时数据库。SQLite 的每个连接都会启用 `PRAGMA foreign_keys=ON`，启动检查在外键未生效或数据库 revision 落后时失败。课程名只要求在同一用户内唯一。
 
-### 认证边界
+## RAG 可信边界与评估
 
-当前访问 token 由后端 HMAC 签发，前端保存在 `localStorage`。这能支持课程设计演示的登录态和用户隔离，但仍是演示级边界，不等同于生产级认证体系；生产化需要 HTTPS、HttpOnly/SameSite Cookie、更短 token 生命周期、CSP/XSS 防护和审计。
+Chroma 返回的 ID、文本和课程元数据不会直接成为回答依据。服务会回查 SQL 中仍存活、属于当前用户和课程的 chunk、document、course 后才构造上下文。资料删除后，即使外部索引清理暂时失败，陈旧索引项也不能重新进入回答。
 
-## 答辩推荐话术
+确定性评估集覆盖正常回答、无资料、低置信拒答、多文档来源、资料内 Prompt 注入以及删除/重新索引场景，并输出 Hit@K、MRR、拒答准确率、引用正确率和平均/P95 延迟：
 
-- 本项目重点不是训练大模型，而是实现课程资料学习辅助的完整工程闭环。
-- 默认 mock/offline 和 hash embedding 是为了稳定演示；真实语义检索和真实大模型可以替换 provider 增强。
-- RAG 回答会尽量基于上传资料来源片段，并展示文件名、页码、chunk 和 score。
-- 如果资料证据不足，系统会拒答，不会硬编一个看似合理的答案。
-- 学习画像是规则模型，不是认知诊断大模型；每个分数都有公式、练习记录和证据片段。
-- 扫描版 PDF/OCR、C++ 编译运行是本地可信演示能力；开放环境必须增加沙箱、资源限制和安全隔离。
+```powershell
+python scripts/rag_eval.py docs/rag_eval_cases.example.json `
+  --output-dir rag_eval_reports
+```
 
-## 项目截图占位
-
-| 场景 | 路径 | 说明 |
-| --- | --- | --- |
-| 首页 | `docs/images/dashboard.png` | 已有示例图 |
-| 课程资料上传 | `docs/images/course-workspace.png` | 已有示例图 |
-| 问答带来源 | `docs/images/qa-source.png` | 已有示例图 |
-| 学习画像 | `docs/images/learning-profile.png` | 已有示例图 |
-
-## 文档
-
-- [架构说明](docs/ARCHITECTURE.md)
-- [RAG 评估说明](docs/RAG_EVAL.md)
-- [安全边界说明](docs/SECURITY.md)
-- [路线图](docs/ROADMAP.md)
-- [API 说明](docs/API.md)
-- [答辩演示脚本](docs/demo-guide.md)
+详见 [RAG 评估说明](docs/RAG_EVAL.md)。
 
 ## 验证
 
-```powershell
-cd D:\sunny\studymate\backend
-python -m pytest tests -q
-```
+后端：
 
 ```powershell
-cd D:\sunny\studymate\frontend
-npm install
+cd backend
+.\.venv\Scripts\python -m pip check
+.\.venv\Scripts\python -m ruff check . ..\scripts
+.\.venv\Scripts\python -m ruff format --check . ..\scripts
+.\.venv\Scripts\python -m pytest tests -q
+```
+
+前端：
+
+```powershell
+cd frontend
+npm ci
+npm run lint
+npm run test:unit
 npm run build
-```
-
-如后端已经启动，可在项目根目录运行：
-
-```powershell
-python scripts\smoke_test.py
-```
-
-RAG 简单评估：
-
-```powershell
-python scripts\rag_eval.py docs\rag_eval_cases.example.json --output-dir rag_eval_reports
-```
-
-运行前先把示例 JSON 中的 `course_id` 改成本地已上传资料的课程 ID。
-脚本会输出控制台 JSON，并生成 `rag_eval_report.json` 和 `rag_eval_report.html`。
-
-前端 E2E：
-
-```powershell
-cd D:\sunny\studymate\frontend
 npm run test:e2e
+npm audit
 ```
 
-Playwright 会启动临时后端和前端，临时数据写入 `frontend/.e2e-storage`。
+容器：
+
+```powershell
+docker compose config --quiet
+$env:AUTH_SECRET_KEY = python -c "import secrets; print(secrets.token_urlsafe(48))"
+docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+docker compose build
+```
+
+## 文档
+
+- [API 说明](docs/API.md)
+- [架构说明](docs/ARCHITECTURE.md)
+- [RAG 评估说明](docs/RAG_EVAL.md)
+- [安全边界说明](docs/SECURITY.md)
+- [部署说明](docs/DEPLOYMENT.md)
+- [演示指南](docs/demo-guide.md)
 
 ## 已知边界
 
-- SQLite 适合本地演示，不适合高并发生产环境。
-- 默认 hash embedding 不是真实语义模型。
-- 默认 mock/offline 不是大模型推理。
-- OCR 依赖本地视觉模型或外部工具，扫描版 PDF 效果受模型和机器性能影响。
-- C++ 本地执行默认关闭；即使开启，也只有临时目录和超时限制，不是安全沙箱。
-- FastAPI `BackgroundTasks` 不是可靠队列；进程重启后，未完成任务会标记为失败并提示手动重试。
-- 当前 token/localStorage 登录态只适合演示，不是生产级认证边界。
-- 学习诊断是可解释规则模型，不是医学/心理测量意义上的认知诊断。
+- SQLite 和进程内限流适合单机演示，不适合多实例高并发生产环境。
+- FastAPI `BackgroundTasks` 不是可靠任务队列；生产环境仍需持久化队列、租约和监控。
+- token 存储在 `localStorage`，生产化仍需 HTTPS、HttpOnly/SameSite Cookie、CSP/XSS/CSRF 防护和审计。
+- OCR 质量、模型数据出域和 C++ 执行风险需要按实际 provider 与部署环境单独评估。
+- 学习诊断是可解释规则模型，不是医学或心理测量意义上的认知诊断。

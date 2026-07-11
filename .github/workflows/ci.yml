@@ -6,32 +6,69 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       APP_ENV: development
+      ENABLE_DEMO_USER: "false"
       TEXT_LLM_PROVIDER: mock
       TEXT_LLM_FALLBACK_PROVIDER: none
       OCR_LLM_PROVIDER: mock
       EMBEDDING_PROVIDER: hash
       EMBEDDING_DIMENSION: "384"
+      RERANK_PROVIDER: rule
+      RATE_LIMIT_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+            backend/requirements-optional-chroma.txt
 
-      - name: Install backend dependencies
+      - name: Install backend development dependencies
         working-directory: backend
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Check installed dependency consistency
+        working-directory: backend
+        run: python -m pip check
+
+      - name: Lint backend
+        working-directory: backend
+        run: python -m ruff check . ../scripts
+
+      - name: Check backend formatting
+        working-directory: backend
+        run: python -m ruff format --check . ../scripts
 
       - name: Run backend tests
         working-directory: backend
         run: python -m pytest tests -q
 
-      - name: Validate Alembic migrations on empty SQLite database
+      - name: Run deterministic RAG regression suite
+        working-directory: backend
+        run: >-
+          python -m pytest
+          tests/test_rag.py
+          tests/test_data_consistency.py
+          tests/test_rag_eval.py
+          -q
+
+      - name: Upgrade an empty database to Alembic head
         working-directory: backend
         env:
           DATABASE_URL: sqlite:///${{ runner.temp }}/studymate-alembic.db
@@ -40,10 +77,30 @@ jobs:
           CHROMA_DIR: ${{ runner.temp }}/studymate-storage/chroma
         run: python -m alembic upgrade head
 
+      - name: Check model and migration parity
+        working-directory: backend
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/studymate-alembic.db
+          STORAGE_DIR: ${{ runner.temp }}/studymate-storage
+          UPLOAD_DIR: ${{ runner.temp }}/studymate-storage/uploads
+          CHROMA_DIR: ${{ runner.temp }}/studymate-storage/chroma
+        run: python -m alembic check
+
+      - name: Verify SQLite foreign keys are enforced
+        working-directory: backend
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/studymate-alembic.db
+        run: >-
+          python -c "from sqlalchemy import text; from app.database import engine;
+          c=engine.connect(); value=c.execute(text('PRAGMA foreign_keys')).scalar_one();
+          c.close(); assert value == 1, value"
+
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       APP_ENV: development
+      ENABLE_DEMO_USER: "true"
       TEXT_LLM_PROVIDER: mock
       TEXT_LLM_FALLBACK_PROVIDER: none
       OCR_LLM_PROVIDER: mock
@@ -58,18 +115,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Audit production frontend dependencies
+      - name: Audit frontend dependencies
         working-directory: frontend
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --audit-level=high
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run frontend unit and accessibility tests
+        working-directory: frontend
+        run: npm run test:unit
 
       - name: Build frontend
         working-directory: frontend
@@ -88,11 +159,69 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate Docker Compose configuration
-        run: docker compose config
+      - name: Validate local demo Compose configuration
+        run: docker compose config --quiet
+
+      - name: Verify production Compose rejects a missing secret
+        shell: bash
+        run: |
+          if env -u AUTH_SECRET_KEY docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet; then
+            echo "production Compose unexpectedly accepted a missing AUTH_SECRET_KEY" >&2
+            exit 1
+          fi
+
+      - name: Validate production Compose security and provider passthrough
+        shell: bash
+        run: |
+          export AUTH_SECRET_KEY="$(openssl rand -hex 32)"
+          export TEXT_LLM_PROVIDER=deepseek
+          export TEXT_LLM_MODEL=ci-provider-sentinel
+          export EMBEDDING_PROVIDER=sentence_transformers
+          export OCR_LLM_PROVIDER=ollama
+          compose_json="${RUNNER_TEMP}/studymate-compose.json"
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config --format json >"${compose_json}"
+          python - "${compose_json}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as file:
+              config = json.load(file)
+          backend = config["services"]["backend"]
+          frontend = config["services"]["frontend"]
+          environment = backend["environment"]
+          assert environment["APP_ENV"] == "production"
+          assert str(environment["ENABLE_DEMO_USER"]).lower() == "false"
+          assert not backend.get("ports")
+          assert frontend["ports"][0]["host_ip"] == "127.0.0.1"
+          assert frontend["environment"]["NGINX_CLIENT_MAX_BODY_SIZE"] == "110m"
+          assert frontend["environment"]["NGINX_ENVSUBST_FILTER"] == "^NGINX_CLIENT_MAX_BODY_SIZE"
+          assert environment["TEXT_LLM_PROVIDER"] == "deepseek"
+          assert environment["TEXT_LLM_MODEL"] == "ci-provider-sentinel"
+          assert environment["EMBEDDING_PROVIDER"] == "sentence_transformers"
+          assert environment["OCR_LLM_PROVIDER"] == "ollama"
+          PY
 
       - name: Build Docker images
         run: docker compose build
+
+      - name: Run container health smoke test
+        shell: bash
+        run: |
+          docker compose up -d
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs
+          exit 1
+
+      - name: Tear down containers
+        if: always()
+        run: docker compose down --volumes

@@ -13,14 +13,18 @@
 1. 启动后端：
 
    ```powershell
-   cd D:\sunny\studymate\backend
+   cd backend
+   Copy-Item .env.example .env
+   python -m alembic upgrade head
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
    ```
+
+   `.env.example` 显式设置 `ENABLE_DEMO_USER=true`；不复制该文件时默认不会创建演示账号。
 
 2. 启动前端：
 
    ```powershell
-   cd D:\sunny\studymate\frontend
+   cd frontend
    npm run dev
    ```
 

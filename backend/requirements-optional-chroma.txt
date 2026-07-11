@@ -1,0 +1,2 @@
+# Install only when the Chroma retrieval index is explicitly required.
+chromadb==0.5.23
